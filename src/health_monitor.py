@@ -811,7 +811,7 @@ class HealthMonitor:
                     self.log_sample(s, "heartbeat")
                     self.buffer_record(s)
                     self.last_heartbeat_log = now
-                    if not s["ok"]:
+                    if not s["ok"] or self.prealarm(s):
                         # A state that goes bad and stays bad stops changing,
                         # so these heartbeats become the only ongoing record.
                         self.flush(force=True)

@@ -103,6 +103,17 @@ sudo systemctl enable --now "${UNIT_NAME}"
 # restart, so re-running this picks up a changed unit file.
 sudo systemctl restart "${UNIT_NAME}"
 
+# "enabled" is the bit people miss - started-but-not-enabled looks fine until
+# the first power cycle, and then the monitor simply isn't there.
+say "Confirming it will come back after a reboot"
+if systemctl is-enabled --quiet "${UNIT_NAME}"; then
+    echo "enabled - it will start on boot."
+else
+    echo "WARNING: ${UNIT_NAME} is NOT enabled. It is running now but will not" >&2
+    echo "         come back after a power cycle. Fix with:" >&2
+    echo "             sudo systemctl enable ${UNIT_NAME}" >&2
+fi
+
 say "Status"
 sudo systemctl status "${UNIT_NAME}" --no-pager || true
 
