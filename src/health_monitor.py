@@ -67,7 +67,7 @@ DEFAULTS: dict[str, Any] = {
         "buffer_max_records": 2000,
         "log_level": "INFO",        # DEBUG/INFO/WARNING/ERROR; --verbose overrides
         "watch_services": ["photonvision"],
-        "service_check_every_n": 10,  # systemctl is slow-ish; don't do it every sample
+        "service_check_every_n": 5,   # systemctl is slow-ish; don't do it every sample
         "thresholds": {
             "temp_warn_c": 70.0,
             "temp_crit_c": 80.0,
@@ -75,17 +75,27 @@ DEFAULTS: dict[str, Any] = {
             "mem_available_min_mb": 200.0,
             "disk_free_min_mb": 500.0,
         },
-        # Hysteresis for change detection on continuous values. Without this,
-        # temperature noise alone would produce a log line every second.
+        # Hysteresis for change detection: how far a reading must move from
+        # the last value LOGGED before it counts as news. See changed().
         "deltas": {
             "temp_c": 2.0,
-            "volts": 0.05,
-            "power_w": 0.5,
+            "volts": 0.02,
+            "power_w": 0.25,
             "cpu_mhz": 100.0,
             "mem_mb": 100.0,
             "disk_mb": 100.0,
         },
     },
+}
+
+# Sample field -> key in config `deltas`. Used for change detection.
+DELTA_FIELDS = {
+    "temp_c": "temp_c",
+    "volts_in": "volts",
+    "power_w": "power_w",
+    "cpu_mhz": "cpu_mhz",
+    "mem_available_mb": "mem_mb",
+    "disk_free_mb": "disk_mb",
 }
 
 THROTTLE_BITS = {
@@ -353,8 +363,24 @@ class BootState:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(payload))
+            # fsync before the rename, or the rename can land while the
+            # contents are still in the page cache. This file's entire job
+            # is surviving a power cut, so durability is the requirement,
+            # not atomicity alone.
+            with tmp.open("w") as f:
+                f.write(json.dumps(payload))
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, self.path)   # atomic; a half-written state file is worse than none
+            try:
+                dir_fd = os.open(self.path.parent, os.O_RDONLY)
+            except OSError:
+                pass                     # not supported here (e.g. Windows)
+            else:
+                try:
+                    os.fsync(dir_fd)     # make the rename itself durable
+                finally:
+                    os.close(dir_fd)
         except OSError as e:
             LOG.error("could not write boot state to %s: %s", self.path, e)
 
@@ -471,7 +497,8 @@ class HealthMonitor:
         self.log_dir = Path(self.h["log_dir"]) if self.h.get("log_dir") else None
         self.last_flush = time.monotonic()
         self.last_heartbeat_log = 0.0
-        self.last_signature: tuple | None = None
+        self.last_discrete: tuple | None = None
+        self.last_logged: dict[str, Any] = {}
 
         # Throttle bits latched at start-of-service, so we can report "since I
         # started watching" separately from "since boot". The since-boot bits
@@ -564,30 +591,50 @@ class HealthMonitor:
 
     # -- change detection -------------------------------------------------
 
-    def signature(self, s: dict[str, Any]) -> tuple:
-        """
-        Bucket the continuous values so noise doesn't produce a log line every
-        second, while any real movement still does.
-        """
-        d = self.deltas
-
-        def bucket(value, size):
-            return None if value is None else int(value / size)
-
+    def discrete_signature(self, s: dict[str, Any]) -> tuple:
+        """The fields that either changed or didn't - no tolerance involved."""
         booleans = tuple(sorted(
             (k, v) for k, v in s.items()
             if isinstance(v, bool) and k not in ("last_boot_unclean",)
         ))
-        return (
-            booleans,
-            s.get("throttled_raw"),
-            bucket(s.get("temp_c"), d["temp_c"]),
-            bucket(s.get("volts_in"), d["volts"]),
-            bucket(s.get("power_w"), d["power_w"]),
-            bucket(s.get("cpu_mhz"), d["cpu_mhz"]),
-            bucket(s.get("mem_available_mb"), d["mem_mb"]),
-            bucket(s.get("disk_free_mb"), d["disk_mb"]),
-        )
+        return (booleans, s.get("throttled_raw"))
+
+    def changed(self, s: dict[str, Any]) -> bool:
+        """
+        True when this sample differs meaningfully from the last one LOGGED.
+
+        Continuous values must have moved at least their delta away from the
+        last value we actually wrote down. That is hysteresis.
+
+        This used to quantise onto a fixed grid - int(value / delta) - and
+        compare bucket numbers. That looks like hysteresis and is not: a
+        reading parked on a bucket boundary flips bucket on pure sensor noise
+        and logs on EVERY sample. With volts at a 0.05 delta, a rail sitting
+        at 4.900V would have chattered across the 98/99 boundary once a second
+        forever, burying the events actually worth reading. Comparing against
+        the last logged value has no boundaries to sit on.
+        """
+        discrete = self.discrete_signature(s)
+        if self.last_discrete is None:
+            return True
+        if discrete != self.last_discrete:
+            return True
+        for field, delta_key in DELTA_FIELDS.items():
+            current = s.get(field)
+            previous = self.last_logged.get(field)
+            if current is None and previous is None:
+                continue
+            if current is None or previous is None:
+                return True      # a reading appeared or vanished; both matter
+            if abs(current - previous) >= float(self.deltas[delta_key]):
+                return True
+        return False
+
+    def remember(self, s: dict[str, Any]) -> None:
+        """Record what we just logged, so the next comparison is against it."""
+        self.last_discrete = self.discrete_signature(s)
+        for field in DELTA_FIELDS:
+            self.last_logged[field] = s.get(field)
 
     def log_sample(self, s: dict[str, Any], reason: str) -> None:
         """Log the inputs to the verdict, never just the verdict."""
@@ -628,17 +675,39 @@ class HealthMonitor:
         now = time.monotonic()
         if not force and (now - self.last_flush) < float(self.h["flush_interval_s"]):
             return
-        self.last_flush = now
+        self.last_flush = now    # set before the attempt, so a failing card
+                                 # backs off to the interval instead of being
+                                 # retried on every single sample
         day = datetime.now().strftime("%Y%m%d")
         path = self.log_dir / f"health-{day}.jsonl"
+
+        # Snapshot rather than drain: nothing leaves the buffer until it is
+        # actually on the card.
+        records = list(self.buffer)
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             with path.open("a") as f:
-                while self.buffer:
-                    f.write(json.dumps(self.buffer.popleft(), default=str) + "\n")
+                for record in records:
+                    f.write(json.dumps(record, default=str) + "\n")
+                f.flush()              # Python buffer -> kernel
+                os.fsync(f.fileno())   # kernel page cache -> the actual card
+                #
+                # Without that fsync the flush interval means very little:
+                # closing a file hands data to the page cache, which writes
+                # back on its own schedule tens of seconds later. A hard
+                # power cut - the event this service exists to witness -
+                # takes anything still sitting there.
         except OSError as e:
-            LOG.error("could not flush health log to %s: %s", path, e)
-            self.buffer.clear()  # don't grow unbounded chasing a dead card
+            # Keep them. The deque is bounded by maxlen, so it cannot grow
+            # without limit - the previous version cleared it here, throwing
+            # away recoverable evidence to solve a problem maxlen had
+            # already solved.
+            LOG.error("could not flush health log to %s: %s "
+                      "(%d record(s) still buffered, will retry)",
+                      path, e, len(records))
+            return
+        for _ in records:
+            self.buffer.popleft()
 
     # -- main loop --------------------------------------------------------
 
@@ -661,12 +730,11 @@ class HealthMonitor:
                 s = self.sample()
                 self.nt.publish(s)
 
-                sig = self.signature(s)
                 now = time.monotonic()
-                if sig != self.last_signature:
-                    self.log_sample(s, "change" if self.last_signature is not None else "baseline")
+                if self.changed(s):
+                    self.log_sample(s, "change" if self.last_discrete is not None else "baseline")
                     self.buffer_record(s)
-                    self.last_signature = sig
+                    self.remember(s)
                     self.last_heartbeat_log = now
                     if not s["ok"]:
                         self.flush(force=True)  # get the evidence onto disk now

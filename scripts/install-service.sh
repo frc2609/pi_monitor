@@ -75,6 +75,27 @@ echo "Installing pip dependencies (pyntcore)..."
 say "Smoke test: one sample in the foreground"
 "${VENV_DIR}/bin/python" "${REPO_DIR}/src/health_monitor.py" --once
 
+# --- Make the journal survive a reboot -----------------------------------
+#
+# journald defaults to Storage=auto, which only writes to disk if
+# /var/log/journal already exists. On a stock image it does not, so the journal
+# lives in /run and is erased on every boot - including the reboot caused BY
+# the brownout you are trying to investigate. A watchdog whose logs evaporate
+# with the event is not a watchdog.
+say "Checking that the journal is persistent"
+if [[ -d /var/log/journal ]]; then
+    echo "/var/log/journal exists - journald is already persistent."
+else
+    echo "journald is currently storing logs in /run, which is wiped on reboot."
+    echo "Creating /var/log/journal so they survive a power cycle."
+    sudo mkdir -p /var/log/journal
+    sudo systemd-tmpfiles --create --prefix /var/log/journal
+    sudo systemctl restart systemd-journald
+    echo "Done. Note this is a system-wide change: ALL services now keep logs"
+    echo "across reboots, and /var/log will grow. Cap it with SystemMaxUse= in"
+    echo "/etc/systemd/journald.conf if space becomes a concern."
+fi
+
 # --- Install the unit ----------------------------------------------------
 say "Installing ${UNIT_NAME}"
 sudo cp "${UNIT_SRC}" "${UNIT_DEST}"

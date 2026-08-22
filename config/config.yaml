@@ -87,8 +87,10 @@ health:
     - photonvision
 
   # systemctl is comparatively slow, so it is checked every Nth sample rather
-  # than every one. At interval_s 1.0 this is a check every 10 seconds.
-  service_check_every_n: 10
+  # than every one. At interval_s 1.0 this is a check every 5 seconds, which
+  # bounds how long PhotonVision can be dead before the log knows - roughly 3%
+  # of a match rather than the 7% that every-10th gave.
+  service_check_every_n: 5
 
   # Crossing a threshold marks the sample as not-ok, which logs at ERROR and
   # forces an immediate flush to disk.
@@ -99,16 +101,25 @@ health:
     mem_available_min_mb: 200.0
     disk_free_min_mb: 500.0       # a full card corrupts logs and breaks vision
 
-  # Hysteresis for change detection. A reading must move by at least this much
-  # before it counts as a change worth logging. Without this, ordinary sensor
-  # noise on the temperature alone would produce a log line every second and
+  # Hysteresis for change detection: a reading must move at least this far
+  # FROM THE LAST VALUE LOGGED before it counts as a change worth writing down.
+  # Without it, ordinary sensor noise would produce a log line every second and
   # bury the events that matter.
+  #
+  # Note "from the last value logged". This is not the same as rounding readings
+  # into fixed buckets and watching the bucket number - that has boundaries, and
+  # a reading parked on one chatters across it on noise alone, producing exactly
+  # the flood the mechanism exists to prevent. See changed() in health_monitor.py.
+  #
   # Raise a value if that reading is chattering; lower it if you are missing
   # movement you care about.
   deltas:
     temp_c: 2.0
-    volts: 0.05
-    power_w: 0.5
+    # Voltage is THE signal for this tool and the alarm threshold is 4.75, so
+    # 50mV granularity gave only ~7 distinguishable steps between healthy and
+    # alarming. 20mV makes a sag legible as a curve instead of a cliff.
+    volts: 0.02
+    power_w: 0.25
     cpu_mhz: 100.0
     mem_mb: 100.0
     disk_mb: 100.0

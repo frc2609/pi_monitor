@@ -137,8 +137,9 @@ service began watching.* **During a match, that is the number that means somethi
 ## Logging
 
 - **On change, not on every sample.** Continuous logging buries the signal and wears
-  out the SD card. Continuous values are bucketed with a hysteresis band so sensor
-  noise alone does not count as a change.
+  out the SD card. A reading counts as changed only once it has moved a configured
+  distance *from the last value actually written down* — real hysteresis, with no
+  fixed boundaries for a noisy reading to sit on and chatter across.
 - **Heartbeat every 30 seconds** regardless, so silence means a dead process rather
   than a quiet one. This is deliberately well under match length — a heartbeat
   longer than a match means a clean match can produce no record at all, and you
@@ -149,6 +150,16 @@ service began watching.* **During a match, that is the number that means somethi
   anything fails the health check. Evidence you did not write down is not evidence,
   and a hard power cut is the event this service exists to witness: whatever is
   still in RAM when the power goes is gone. Ten seconds is roughly 7% of a match.
+- **Flushes are `fsync`ed.** Closing a file only hands the data to the kernel's page
+  cache, which writes back on its own schedule tens of seconds later — so without
+  the `fsync` the flush interval would be close to meaningless against the exact
+  failure this tool exists for.
+- **A failed write keeps the records buffered** and retries on the next flush,
+  rather than discarding them. The buffer is bounded by `buffer_max_records`, so it
+  cannot grow without limit.
+- **The boot-state file is `fsync`ed before its rename**, for the same reason: its
+  whole job is surviving a power cut, so an atomic rename over unflushed data would
+  miss the point.
 
 Everything also reaches the journal: `journalctl -u health-monitor -f`.
 
