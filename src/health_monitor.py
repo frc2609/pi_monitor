@@ -735,7 +735,7 @@ class HealthMonitor:
             f"ok={s['ok']}",
             f"throttled={describe_throttled(s['throttled_raw']) if s['throttled_raw'] is not None else 'n/a'}",
             f"temp={fmt(s['temp_c'], '°C')}",
-            f"vin={fmt(s['volts_in'], 'V')}",
+            f"vin={fmt(s['volts_in'], 'V', 2)}",   # 2dp: the delta is 0.02V
             f"pwr={fmt(s['power_w'], 'W')}",
             f"cpu={fmt(s['cpu_mhz'], 'MHz', 0)}",
             f"mem={fmt(s['mem_available_mb'], 'MB', 0)}",
