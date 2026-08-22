@@ -593,16 +593,22 @@ class HealthMonitor:
         """
         if self.log_dir is None:
             return None
-        suffix = f"-b{self.state.boot_count}.jsonl"
+        # Boot number leads, zero-padded, so sorting by name is boot order.
+        # Sorting by the date would trust the clock, and the clock is the thing
+        # we cannot trust - one boot with a wrong year would sort to the end and
+        # be mistaken for the most recent.
+        prefix = f"health-b{self.state.boot_count:05d}"
         if self.state.boot_id is not None:
             try:
-                existing = sorted(self.log_dir.glob(f"health-*{suffix}"))
+                existing = sorted(self.log_dir.glob(f"{prefix}-*.jsonl"))
             except OSError:
                 existing = []
             if existing:
                 return existing[-1]
+        # The date is only here so a human can see roughly when a boot was.
+        # Nothing depends on it being right.
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        return self.log_dir / f"health-{stamp}{suffix}"
+        return self.log_dir / f"{prefix}-{stamp}.jsonl"
 
     # -- sampling ---------------------------------------------------------
 

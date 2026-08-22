@@ -164,9 +164,15 @@ service began watching.* **During a match, that is the number that means somethi
 Records go to `/var/log/health-monitor/`, **one file per boot**:
 
 ```
-health-20260822-183229-b4.jsonl
-       date     time   boot number
+health-b00004-20260822-183229.jsonl
+       boot   date     time
 ```
+
+The boot number leads so that sorting by filename is boot order. Sorting by
+date would trust the clock, and the clock is the one thing here that cannot be
+trusted - a single boot with a wrong year would sort to the end and be mistaken
+for the most recent. The date is only there so a human can see roughly when a
+boot was; nothing depends on it being right.
 
 Not per day, and not per start. A restart inside the same boot appends to the
 file already open for that boot, so a crash loop leaves one readable file
