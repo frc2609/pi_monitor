@@ -38,6 +38,12 @@ The installer creates the venv, installs `pyntcore`, runs one foreground sample 
 smoke test, makes the journal persistent, installs the unit, and confirms the service
 is **enabled** — not just started.
 
+**It adapts the unit file to you.** The copy in the repo is written for user `pi` at
+`/home/pi/vision/monitor`, but current Pi OS makes you choose a username when imaging.
+The installer rewrites `User=`, `Group=` and every path to whoever is running it and
+wherever the repo actually sits, so `admin` at `/home/admin/vision/monitor` works with
+no editing. It also warns if you are not in the `video` group, which `vcgencmd` needs.
+
 > **`start` and `enable` are different.** `start` runs it now. `enable` makes it come
 > back after a reboot. A service that was started but never enabled works perfectly
 > until the first power cycle, and that power cycle is usually at a competition.

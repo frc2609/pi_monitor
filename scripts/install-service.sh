@@ -15,7 +15,8 @@ UNIT_NAME="health-monitor.service"
 UNIT_SRC="${REPO_DIR}/services/${UNIT_NAME}"
 UNIT_DEST="/etc/systemd/system/${UNIT_NAME}"
 VENV_DIR="${REPO_DIR}/.venv"
-EXPECTED_DIR="/home/pi/vision/monitor"
+RUN_USER="$(id -un)"
+RUN_GROUP="$(id -gn)"
 
 say() { printf '\n==> %s\n' "$1"; }
 
@@ -25,15 +26,11 @@ if [[ ${EUID} -eq 0 ]]; then
     exit 1
 fi
 
-# The unit file has absolute paths in it. Cloned elsewhere, the service fails
-# at start with a confusing "no such file", so say so now instead.
-if [[ "${REPO_DIR}" != "${EXPECTED_DIR}" ]]; then
-    echo "WARNING: repo is at ${REPO_DIR}, but ${UNIT_NAME} has ${EXPECTED_DIR}" >&2
-    echo "         hardcoded in WorkingDirectory and ExecStart." >&2
-    echo "         Either clone to ${EXPECTED_DIR}, or edit those paths in" >&2
-    echo "         services/${UNIT_NAME} before continuing." >&2
-    read -r -p "Continue anyway? [y/N] " reply
-    [[ "${reply}" =~ ^[Yy]$ ]] || exit 1
+# vcgencmd reads the firmware mailbox, which needs the video group, not root.
+if ! groups | grep -qw video; then
+    echo "WARNING: ${RUN_USER} is not in the video group, so vcgencmd will fail." >&2
+    echo "         Fix with:  sudo usermod -aG video ${RUN_USER}" >&2
+    echo "         Then log out and back in." >&2
 fi
 
 # --- Dependencies --------------------------------------------------------
@@ -87,8 +84,19 @@ else
 fi
 
 # --- Install the unit ----------------------------------------------------
-say "Installing ${UNIT_NAME}"
-sudo cp "${UNIT_SRC}" "${UNIT_DEST}"
+# The unit in the repo is written for user "pi" at /home/pi/vision/monitor.
+# Current Pi OS makes you choose a username when imaging, so that is only a
+# default - rewrite it for whoever is installing and wherever the repo is.
+say "Installing ${UNIT_NAME} for user ${RUN_USER}"
+echo "  user  : ${RUN_USER}:${RUN_GROUP}"
+echo "  paths : ${REPO_DIR}"
+TMP_UNIT="$(mktemp)"
+sed -e "s|^User=.*|User=${RUN_USER}|" \
+    -e "s|^Group=.*|Group=${RUN_GROUP}|" \
+    -e "s|/home/pi/vision/monitor|${REPO_DIR}|g" \
+    "${UNIT_SRC}" > "${TMP_UNIT}"
+sudo cp "${TMP_UNIT}" "${UNIT_DEST}"
+rm -f "${TMP_UNIT}"
 sudo systemctl daemon-reload
 
 # start and enable are different things, and this catches people every year:
