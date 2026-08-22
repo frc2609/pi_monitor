@@ -161,6 +161,18 @@ service began watching.* **During a match, that is the number that means somethi
   whole job is surviving a power cut, so an atomic rename over unflushed data would
   miss the point.
 
+Records go to `/var/log/health-monitor/`, **one file per service start**:
+
+```
+health-20260822-183229-b4.jsonl
+       date     time   boot number
+```
+
+Not one file per day - a competition day is many runs and several reboots, and
+mixing them into one file makes a trace unreadable. The boot number is in the
+name because the clock cannot be trusted: a Pi with no RTC battery comes up with
+the wrong time until something syncs it, so two runs can claim the same stamp.
+
 Everything also reaches the journal: `journalctl -u health-monitor -f`.
 
 ### NetworkTables

@@ -37,7 +37,7 @@ def monitor_with_log(tmp, volts):
     logs = Path(tmp) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     now = time.time()
-    with (logs / "health-20260822.jsonl").open("w") as f:
+    with (logs / "health-20260822-101500-b1.jsonl").open("w") as f:
         for i, v in enumerate(volts):
             f.write(json.dumps({
                 "ts": now - (len(volts) - i), "volts_in": v,
@@ -105,5 +105,28 @@ assert mon.prealarm({"volts_in": limit - 0.10})
 assert not mon.prealarm({"volts_in": None})   # no reading is not an alarm
 print("PASS  pre-alarm trips at %.2fV, before the %.2fV fault threshold"
       % (limit, cfg["health"]["thresholds"]["volts_min"]))
+
+# One log file per service start, so runs and reboots don't get mixed together.
+with tempfile.TemporaryDirectory() as tmp:
+    logs = Path(tmp) / "logs"
+    cfg2 = deep_merge(DEFAULTS, {"health": {
+        "nt_enabled": False, "log_dir": str(logs),
+        "state_dir": str(Path(tmp) / "state")}})
+    names = []
+    for run in range(3):
+        mon = HealthMonitor(cfg2, nt_enabled=False)
+        mon.buffer.append({"ts": time.time(), "run": run})
+        mon.flush(force=True)
+        names.append(mon.log_path.name)
+        time.sleep(1.1)          # the name carries a whole-second timestamp
+    assert len(set(names)) == 3, names
+    assert len(list(logs.glob("*.jsonl"))) == 3, names
+
+    # A new run must read the PREVIOUS file, never the one it is about to write.
+    mon = HealthMonitor(cfg2, nt_enabled=False)
+    assert mon.log_path.name not in names
+    prev = read_last_records(logs, exclude=mon.log_path)
+    assert prev and prev[-1]["run"] == 2, prev
+    print("PASS  one file per run, and the previous run is what gets read back")
 
 print("\nALL PASS")

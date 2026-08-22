@@ -292,13 +292,15 @@ def sd_notify(message: str) -> bool:
         return False
 
 
-def read_last_records(log_dir: Path, count: int = 5) -> list[dict]:
+def read_last_records(log_dir: Path, count: int = 5,
+                      exclude: Path | None = None) -> list[dict]:
     """
-    Last few records from the newest health log. Used after an unclean boot to
-    show what the Pi was doing just before the power went.
+    Last few records from the newest health log, skipping `exclude` so we never
+    read the file this run is writing. Used after an unclean boot to show what
+    the Pi was doing just before the power went.
     """
     try:
-        files = sorted(log_dir.glob("health-*.jsonl"))
+        files = [p for p in sorted(log_dir.glob("health-*.jsonl")) if p != exclude]
         if not files:
             return []
         with files[-1].open("rb") as f:          # tail, not the whole file
@@ -546,6 +548,15 @@ class HealthMonitor:
 
         self.buffer: deque[dict] = deque(maxlen=int(self.h["buffer_max_records"]))
         self.log_dir = Path(self.h["log_dir"]) if self.h.get("log_dir") else None
+        # One file per service start rather than per day. A competition day is
+        # many runs and several reboots, and mixing them into one file makes a
+        # trace unreadable. boot_count is in the name because the clock cannot
+        # be trusted - a Pi with no RTC battery comes up with the wrong time
+        # until something syncs it, so two runs can claim the same timestamp.
+        self.log_path = None
+        if self.log_dir is not None:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self.log_path = self.log_dir / f"health-{stamp}-b{self.state.boot_count}.jsonl"
         self.last_flush = time.monotonic()
         self.last_heartbeat_log = 0.0
         self.log_write_ok = True
@@ -657,7 +668,7 @@ class HealthMonitor:
         """After an unclean boot, say when it happened and what it looked like."""
         if not self.state.last_boot_was_unclean or self.log_dir is None:
             return
-        records = read_last_records(self.log_dir)
+        records = read_last_records(self.log_dir, exclude=self.log_path)
         if not records:
             LOG.warning("previous boot ended uncleanly, but no log records "
                         "survived to say what happened")
@@ -771,8 +782,7 @@ class HealthMonitor:
         self.last_flush = now    # set before the attempt, so a failing card
                                  # backs off to the interval instead of being
                                  # retried on every single sample
-        day = datetime.now().strftime("%Y%m%d")
-        path = self.log_dir / f"health-{day}.jsonl"
+        path = self.log_path
 
         # Snapshot rather than drain: nothing leaves the buffer until it is
         # actually on the card.
@@ -811,8 +821,9 @@ class HealthMonitor:
 
         interval = float(self.h["interval_s"])
         heartbeat_log_s = float(self.h["heartbeat_log_s"])
-        LOG.info("health-monitor starting: interval=%.2fs table=%s state=%s log_dir=%s",
-                 interval, self.h["nt_table"], self.h["state_dir"], self.h["log_dir"])
+        LOG.info("health-monitor starting: interval=%.2fs table=%s state=%s",
+                 interval, self.h["nt_table"], self.h["state_dir"])
+        LOG.info("writing records to %s", self.log_path or "(disk logging disabled)")
         self.report_previous_boot()
 
         # systemd holds the service in "activating" until this arrives, then
