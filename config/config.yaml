@@ -50,6 +50,7 @@ health:
     temp_warn_c: 70.0            # warning only
     temp_crit_c: 80.0            # Pi 5 starts throttling itself around here
     volts_min: 4.75              # 5V rail below this means a supply problem
+    volts_prealarm: 4.90         # not a fault yet, but flush to disk now
     mem_available_min_mb: 200.0
     disk_free_min_mb: 500.0
 

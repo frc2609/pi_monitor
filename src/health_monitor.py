@@ -65,6 +65,7 @@ DEFAULTS: dict[str, Any] = {
             "temp_warn_c": 70.0,
             "temp_crit_c": 80.0,
             "volts_min": 4.75,
+            "volts_prealarm": 4.90,
             "mem_available_min_mb": 200.0,
             "disk_free_min_mb": 500.0,
         },
@@ -269,6 +270,30 @@ def read_load1() -> float | None:
         return None
 
 
+def read_last_records(log_dir: Path, count: int = 5) -> list[dict]:
+    """
+    Last few records from the newest health log. Used after an unclean boot to
+    show what the Pi was doing just before the power went.
+    """
+    try:
+        files = sorted(log_dir.glob("health-*.jsonl"))
+        if not files:
+            return []
+        with files[-1].open("rb") as f:          # tail, not the whole file
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines[-count:]:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
 def read_boot_id() -> str | None:
     try:
         return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
@@ -442,6 +467,28 @@ class NTPublisher:
             except Exception as e:  # never let a publish failure kill the watchdog
                 LOG.debug("publish failed for %s: %s", key, e)
 
+    def status(self) -> dict[str, Any]:
+        """
+        Connection state, plus NT4's client/server clock offset in
+        microseconds. NT4 syncs the client's clock to the server's, so this is
+        what lines our records up with roboRIO logs without touching the OS
+        clock.
+        """
+        out: dict[str, Any] = {"nt_connected": None, "nt_offset_us": None}
+        if not self.enabled or self.inst is None:
+            return out
+        try:
+            out["nt_connected"] = bool(self.inst.isConnected())
+        except Exception:
+            pass
+        try:
+            offset = self.inst.getServerTimeOffset()
+            if offset is not None:
+                out["nt_offset_us"] = int(offset)
+        except Exception:
+            pass       # older ntcore, or server mode where it means nothing
+        return out
+
     def close(self) -> None:
         if not self.enabled or self.inst is None:
             return
@@ -479,6 +526,7 @@ class HealthMonitor:
         self.log_dir = Path(self.h["log_dir"]) if self.h.get("log_dir") else None
         self.last_flush = time.monotonic()
         self.last_heartbeat_log = 0.0
+        self.log_write_ok = True
         self.last_discrete: tuple | None = None
         self.last_logged: dict[str, Any] = {}
 
@@ -548,7 +596,11 @@ class HealthMonitor:
             "boot_count": self.state.boot_count,
             "unclean_boots": self.state.unclean_boots,
             "last_boot_unclean": self.state.last_boot_was_unclean,
+            # False means the card is refusing writes. Only the journal would
+            # have it otherwise, and nobody reads the journal mid-match.
+            "log_write_ok": self.log_write_ok,
         }
+        s.update(self.nt.status())
         for name, active in self.service_cache.items():
             s[f"svc_{name.replace('-', '_')}_active"] = active
 
@@ -569,6 +621,49 @@ class HealthMonitor:
         ]
         checks += [v is not False for k, v in s.items() if k.startswith("svc_")]
         return all(checks)
+
+    def prealarm(self, s: dict[str, Any]) -> bool:
+        """
+        Voltage close to the limit but not past it yet. Worth forcing a flush:
+        if it keeps falling we want the run-up already on the card.
+        """
+        v = s.get("volts_in")
+        limit = self.thresholds.get("volts_prealarm")
+        return v is not None and limit is not None and v <= float(limit)
+
+    def report_previous_boot(self) -> None:
+        """After an unclean boot, say when it happened and what it looked like."""
+        if not self.state.last_boot_was_unclean or self.log_dir is None:
+            return
+        records = read_last_records(self.log_dir)
+        if not records:
+            LOG.warning("previous boot ended uncleanly, but no log records "
+                        "survived to say what happened")
+            return
+
+        def when(rec):
+            try:
+                return datetime.fromtimestamp(rec["ts"]).strftime("%H:%M:%S")
+            except (KeyError, ValueError, OSError):
+                return "??:??:??"
+
+        LOG.warning("previous boot ended uncleanly - last record at %s "
+                    "(clock is only trustworthy if the Pi has an RTC battery "
+                    "or reached a time server)", when(records[-1]))
+        for r in records:
+            LOG.warning("  %s vin=%s temp=%s load=%s ok=%s", when(r),
+                        fmt(r.get("volts_in"), "V", 2),
+                        fmt(r.get("temp_c"), "C"),
+                        fmt(r.get("load1"), "", 2),
+                        r.get("ok"))
+
+        volts = [r["volts_in"] for r in records if r.get("volts_in") is not None]
+        if len(volts) >= 2 and volts[-1] < volts[0]:
+            LOG.warning("  voltage was falling before power was lost - reads as a "
+                        "brownout rather than something disconnecting it")
+        elif volts:
+            LOG.warning("  voltage looked healthy right up to the cut - reads as "
+                        "power being disconnected rather than a brownout")
 
     # -- change detection -------------------------------------------------
 
@@ -673,10 +768,12 @@ class HealthMonitor:
         except OSError as e:
             # Keep the records and retry. maxlen already bounds the buffer,
             # so there is no need to throw evidence away here.
+            self.log_write_ok = False
             LOG.error("could not flush health log to %s: %s "
                       "(%d record(s) still buffered, will retry)",
                       path, e, len(records))
             return
+        self.log_write_ok = True
         for _ in records:
             self.buffer.popleft()
 
@@ -694,6 +791,7 @@ class HealthMonitor:
         heartbeat_log_s = float(self.h["heartbeat_log_s"])
         LOG.info("health-monitor starting: interval=%.2fs table=%s state=%s log_dir=%s",
                  interval, self.h["nt_table"], self.h["state_dir"], self.h["log_dir"])
+        self.report_previous_boot()
 
         next_t = time.monotonic()
         while self.running:
@@ -707,7 +805,7 @@ class HealthMonitor:
                     self.buffer_record(s)
                     self.remember(s)
                     self.last_heartbeat_log = now
-                    if not s["ok"]:
+                    if not s["ok"] or self.prealarm(s):
                         self.flush(force=True)  # get the evidence onto disk now
                 elif (now - self.last_heartbeat_log) >= heartbeat_log_s:
                     self.log_sample(s, "heartbeat")
@@ -764,6 +862,8 @@ def print_once(mon: HealthMonitor, as_json: bool) -> None:
     print(f"disk free          : {fmt(s['disk_free_mb'], ' MB', 0)}")
     print(f"load (1m)          : {fmt(s['load1'], '', 2)}")
     print(f"uptime             : {fmt(s['uptime_s'], ' s', 0)}")
+    print(f"nt connected       : {s['nt_connected']}  offset_us={s['nt_offset_us']}")
+    print(f"log writes ok      : {s['log_write_ok']}")
     print(f"boots / unclean    : {s['boot_count']} / {s['unclean_boots']}"
           + ("   <-- last boot was NOT clean" if s["last_boot_unclean"] else ""))
     for k, v in s.items():
