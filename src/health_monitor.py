@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -268,6 +269,27 @@ def read_load1() -> float | None:
         return os.getloadavg()[0]
     except (AttributeError, OSError):
         return None
+
+
+def sd_notify(message: str) -> bool:
+    """
+    Tell systemd we are still alive, via $NOTIFY_SOCKET.
+
+    Does nothing when that variable is unset, which is the case whenever the
+    monitor is run by hand - so laptop and --once runs are unaffected.
+    """
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return False
+    if addr.startswith("@"):            # abstract socket namespace
+        addr = "\0" + addr[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.connect(addr)
+            sock.sendall(message.encode())
+        return True
+    except (OSError, AttributeError):   # AF_UNIX is absent on Windows
+        return False
 
 
 def read_last_records(log_dir: Path, count: int = 5) -> list[dict]:
@@ -793,6 +815,11 @@ class HealthMonitor:
                  interval, self.h["nt_table"], self.h["state_dir"], self.h["log_dir"])
         self.report_previous_boot()
 
+        # systemd holds the service in "activating" until this arrives, then
+        # starts enforcing WatchdogSec.
+        if sd_notify("READY=1"):
+            LOG.info("systemd watchdog active")
+
         next_t = time.monotonic()
         while self.running:
             try:
@@ -817,6 +844,11 @@ class HealthMonitor:
                         self.flush(force=True)
 
                 self.flush()
+
+                # Only reached if the whole iteration completed. A hang inside
+                # it stops these, and systemd restarts us - which Restart=always
+                # cannot do, because a stuck process never exits.
+                sd_notify("WATCHDOG=1")
             except Exception:
                 LOG.exception("sample failed — continuing")
 
@@ -827,6 +859,7 @@ class HealthMonitor:
                 sleep = 0
             time.sleep(sleep)
 
+        sd_notify("STOPPING=1")
         self.flush(force=True)
         self.state.mark_clean()
         self.nt.close()

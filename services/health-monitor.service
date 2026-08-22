@@ -15,7 +15,15 @@ After=network.target
 StartLimitIntervalSec=0
 
 [Service]
-Type=simple
+# notify, not simple: the monitor pings systemd every loop. If it hangs - alive
+# but stuck - systemd kills and restarts it. Restart=always cannot do that,
+# because a stuck process never exits.
+Type=notify
+
+# Must comfortably exceed one loop's worst case: interval_s plus four vcgencmd
+# timeouts (3s each) plus a systemctl check (5s), so about 17s. 60s leaves room
+# for a slow card during a flush.
+WatchdogSec=60
 
 # vcgencmd needs the video group, not root. Check with:
 #     sudo -u pi vcgencmd get_throttled

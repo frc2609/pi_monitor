@@ -221,6 +221,13 @@ come back after a reboot. `enable --now` does both, which is what the install sc
 uses. A service that was started but never enabled works perfectly until the first
 power cycle, and then silently does not — a classic competition-day failure.
 
+**systemd watches it for hangs.** The unit is `Type=notify` with
+`WatchdogSec=60`, and the monitor pings systemd once per loop. If it stops
+pinging, systemd kills and restarts it. `Restart=always` cannot cover this on
+its own, because a process that is stuck rather than dead never exits. Running
+the script by hand skips all of it - the ping is a no-op with no
+`$NOTIFY_SOCKET`.
+
 The monitor is a **separate service from PhotonVision, on purpose.** It is not ordered
 against it and not bound to it. If a brownout kills PhotonVision, the monitor has to
 survive to record why. A witness that dies alongside the thing it is watching is useless.
