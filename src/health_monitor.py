@@ -93,6 +93,10 @@ DELTA_FIELDS = {
     "disk_free_mb": "disk_mb",
 }
 
+# Starts within one boot before we call it a restart loop. systemd is told
+# never to stop restarting us, so nothing else will notice.
+RESTART_LOOP_WARN = 5
+
 THROTTLE_BITS = {
     0: ("undervoltage_now", "under-voltage RIGHT NOW"),
     1: ("freq_capped_now", "ARM frequency capped now"),
@@ -355,6 +359,7 @@ class BootState:
         self.boot_id = read_boot_id()
         self.boot_count = 0
         self.unclean_boots = 0
+        self.starts_this_boot = 1
         self.last_boot_was_unclean = False
         self._load_and_update()
 
@@ -369,6 +374,7 @@ class BootState:
         self.unclean_boots = int(prev.get("unclean_boots", 0))
         prev_boot_id = prev.get("boot_id")
         prev_clean = bool(prev.get("clean_shutdown", True))
+        prev_starts = int(prev.get("starts_this_boot", 0))
 
         if prev_boot_id != self.boot_id:
             # Genuinely a new boot, not just a service restart within one boot.
@@ -381,7 +387,16 @@ class BootState:
                     "(prev_boot_id=%s, clean_marker=false) — power cut or brownout reset. "
                     "unclean_boots=%d", prev_boot_id, self.unclean_boots)
         else:
-            LOG.info("service restarted within the same boot (boot_id unchanged)")
+            self.starts_this_boot = prev_starts + 1
+            LOG.info("service restarted within the same boot (start #%d)",
+                     self.starts_this_boot)
+            if self.starts_this_boot >= RESTART_LOOP_WARN:
+                LOG.warning(
+                    "started %d times without a reboot - something keeps killing "
+                    "this service. systemd will not give up on its own "
+                    "(StartLimitIntervalSec=0), so nothing else will flag it. "
+                    "Check: journalctl -u health-monitor -b",
+                    self.starts_this_boot)
 
         self._write(clean=False)
 
@@ -392,6 +407,7 @@ class BootState:
             "boot_id": self.boot_id,
             "boot_count": self.boot_count,
             "unclean_boots": self.unclean_boots,
+            "starts_this_boot": self.starts_this_boot,
             "clean_shutdown": clean,
             "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
@@ -548,15 +564,7 @@ class HealthMonitor:
 
         self.buffer: deque[dict] = deque(maxlen=int(self.h["buffer_max_records"]))
         self.log_dir = Path(self.h["log_dir"]) if self.h.get("log_dir") else None
-        # One file per service start rather than per day. A competition day is
-        # many runs and several reboots, and mixing them into one file makes a
-        # trace unreadable. boot_count is in the name because the clock cannot
-        # be trusted - a Pi with no RTC battery comes up with the wrong time
-        # until something syncs it, so two runs can claim the same timestamp.
-        self.log_path = None
-        if self.log_dir is not None:
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            self.log_path = self.log_dir / f"health-{stamp}-b{self.state.boot_count}.jsonl"
+        self.log_path = self.log_file_for_this_boot()
         self.last_flush = time.monotonic()
         self.last_heartbeat_log = 0.0
         self.log_write_ok = True
@@ -572,6 +580,29 @@ class HealthMonitor:
         self.sample_count = 0
         self.heartbeat = 0
         self.running = True
+
+    def log_file_for_this_boot(self) -> Path | None:
+        """
+        One file per boot, not per day and not per start. A restart inside the
+        same boot appends to the file already open for it, so a crash loop
+        leaves one readable file instead of a directory full of fragments.
+
+        boot_count is in the name because the clock cannot be trusted: a Pi
+        with no RTC battery comes up with the wrong time until something syncs
+        it, so two boots can otherwise claim the same timestamp.
+        """
+        if self.log_dir is None:
+            return None
+        suffix = f"-b{self.state.boot_count}.jsonl"
+        if self.state.boot_id is not None:
+            try:
+                existing = sorted(self.log_dir.glob(f"health-*{suffix}"))
+            except OSError:
+                existing = []
+            if existing:
+                return existing[-1]
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        return self.log_dir / f"health-{stamp}{suffix}"
 
     # -- sampling ---------------------------------------------------------
 
@@ -628,6 +659,7 @@ class HealthMonitor:
             "uptime_s": read_uptime_s(),
             "boot_count": self.state.boot_count,
             "unclean_boots": self.state.unclean_boots,
+            "starts_this_boot": self.state.starts_this_boot,
             "last_boot_unclean": self.state.last_boot_was_unclean,
             # False means the card is refusing writes. Only the journal would
             # have it otherwise, and nobody reads the journal mid-match.
@@ -908,6 +940,8 @@ def print_once(mon: HealthMonitor, as_json: bool) -> None:
     print(f"uptime             : {fmt(s['uptime_s'], ' s', 0)}")
     print(f"nt connected       : {s['nt_connected']}  offset_us={s['nt_offset_us']}")
     print(f"log writes ok      : {s['log_write_ok']}")
+    print(f"starts this boot   : {s['starts_this_boot']}"
+          + ("   <-- restart loop?" if s['starts_this_boot'] >= RESTART_LOOP_WARN else ""))
     print(f"boots / unclean    : {s['boot_count']} / {s['unclean_boots']}"
           + ("   <-- last boot was NOT clean" if s["last_boot_unclean"] else ""))
     for k, v in s.items():

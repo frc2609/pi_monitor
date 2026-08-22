@@ -15,7 +15,9 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
-from health_monitor import DEFAULTS, HealthMonitor, deep_merge, read_last_records
+import health_monitor as hm
+from health_monitor import (DEFAULTS, RESTART_LOOP_WARN, HealthMonitor,
+                            deep_merge, read_last_records)
 
 
 class Captured(logging.Handler):
@@ -106,27 +108,51 @@ assert not mon.prealarm({"volts_in": None})   # no reading is not an alarm
 print("PASS  pre-alarm trips at %.2fV, before the %.2fV fault threshold"
       % (limit, cfg["health"]["thresholds"]["volts_min"]))
 
-# One log file per service start, so runs and reboots don't get mixed together.
+# One log file per BOOT. Restarts inside a boot append to it, so a crash loop
+# leaves one readable file rather than a directory full of fragments.
 with tempfile.TemporaryDirectory() as tmp:
     logs = Path(tmp) / "logs"
     cfg2 = deep_merge(DEFAULTS, {"health": {
         "nt_enabled": False, "log_dir": str(logs),
         "state_dir": str(Path(tmp) / "state")}})
-    names = []
-    for run in range(3):
-        mon = HealthMonitor(cfg2, nt_enabled=False)
-        mon.buffer.append({"ts": time.time(), "run": run})
-        mon.flush(force=True)
-        names.append(mon.log_path.name)
-        time.sleep(1.1)          # the name carries a whole-second timestamp
-    assert len(set(names)) == 3, names
-    assert len(list(logs.glob("*.jsonl"))) == 3, names
 
-    # A new run must read the PREVIOUS file, never the one it is about to write.
-    mon = HealthMonitor(cfg2, nt_enabled=False)
-    assert mon.log_path.name not in names
-    prev = read_last_records(logs, exclude=mon.log_path)
-    assert prev and prev[-1]["run"] == 2, prev
-    print("PASS  one file per run, and the previous run is what gets read back")
+    real_boot_id = hm.read_boot_id
+    try:
+        hm.read_boot_id = lambda: "boot-A"
+        restarts = RESTART_LOOP_WARN + 1
+        for i in range(restarts):
+            mon = HealthMonitor(cfg2, nt_enabled=False)
+            mon.buffer.append({"ts": time.time(), "start": mon.state.starts_this_boot})
+            mon.flush(force=True)
+            if i == 0:
+                time.sleep(1.05)     # so a second file would get a different name
+
+        files = sorted(logs.glob("*.jsonl"))
+        assert len(files) == 1, [p.name for p in files]
+        assert len(files[0].read_text().splitlines()) == restarts
+        assert mon.state.starts_this_boot == restarts, mon.state.starts_this_boot
+        print("PASS  %d restarts in one boot stay in one file" % restarts)
+
+        # A crash loop has to be visible in the published data, because systemd
+        # is told never to give up restarting and so will not flag it.
+        assert mon.sample()["starts_this_boot"] >= RESTART_LOOP_WARN
+        print("PASS  restart count is published, so a loop is visible")
+
+        # A real reboot starts a new file and resets the counter.
+        hm.read_boot_id = lambda: "boot-B"
+        mon2 = HealthMonitor(cfg2, nt_enabled=False)
+        mon2.buffer.append({"ts": time.time(), "start": 1})
+        mon2.flush(force=True)
+        assert len(list(logs.glob("*.jsonl"))) == 2
+        assert mon2.state.starts_this_boot == 1
+        assert mon2.log_path != files[0]
+        print("PASS  a real reboot starts a new file and resets the count")
+
+        # The previous boot's file is what gets read back, not this one.
+        prev = read_last_records(logs, exclude=mon2.log_path)
+        assert prev and prev[-1]["start"] == restarts, prev
+        print("PASS  the previous boot's file is what gets read back")
+    finally:
+        hm.read_boot_id = real_boot_id
 
 print("\nALL PASS")

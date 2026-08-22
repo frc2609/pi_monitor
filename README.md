@@ -161,17 +161,25 @@ service began watching.* **During a match, that is the number that means somethi
   whole job is surviving a power cut, so an atomic rename over unflushed data would
   miss the point.
 
-Records go to `/var/log/health-monitor/`, **one file per service start**:
+Records go to `/var/log/health-monitor/`, **one file per boot**:
 
 ```
 health-20260822-183229-b4.jsonl
        date     time   boot number
 ```
 
-Not one file per day - a competition day is many runs and several reboots, and
-mixing them into one file makes a trace unreadable. The boot number is in the
-name because the clock cannot be trusted: a Pi with no RTC battery comes up with
-the wrong time until something syncs it, so two runs can claim the same stamp.
+Not per day, and not per start. A restart inside the same boot appends to the
+file already open for that boot, so a crash loop leaves one readable file
+instead of a directory full of fragments. The boot number is in the name
+because the clock cannot be trusted: a Pi with no RTC battery comes up with the
+wrong time until something syncs it, so two boots could otherwise claim the
+same stamp.
+
+**Watch `starts_this_boot`.** It counts how many times the service has started
+without a reboot, and is published to NetworkTables. Anything above 1 means
+something is killing it; past 5 it also logs a warning. Nothing else will tell
+you - the unit sets `StartLimitIntervalSec=0`, so systemd restarts it forever
+without ever complaining.
 
 Everything also reaches the journal: `journalctl -u health-monitor -f`.
 
