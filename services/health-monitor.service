@@ -1,0 +1,80 @@
+[Unit]
+Description=Vision coprocessor health monitor (power/throttle watchdog)
+Documentation=file:///home/pi/vision/monitor/README.md
+
+# Deliberately NOT After= or Requires= photonvision.
+#
+# This service exists to outlive the vision process. If it were ordered
+# against or bound to PhotonVision, whatever kills PhotonVision could take
+# the witness down with it, and we would be exactly as blind as before.
+#
+# network.target rather than network-online.target on purpose: the monitor
+# must start even when the network does not. A network that failed to come up
+# is itself a thing worth having recorded, and waiting on it could delay or
+# block the one process guaranteed to be running when something goes wrong.
+# NetworkTables reconnects on its own once the network appears.
+After=network.target
+
+# Never stop restarting. The default (5 restarts in 10s, then give up) would
+# retire the watchdog during exactly the brownout storm it was written for.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+
+# vcgencmd does not need root — it needs membership in the video group.
+# Verify on your Pi rather than reaching for root:
+#     sudo -u pi vcgencmd get_throttled
+# If that works, this user is sufficient.
+User=pi
+Group=pi
+SupplementaryGroups=video
+
+WorkingDirectory=/home/pi/vision/monitor
+Environment=PYTHONUNBUFFERED=1
+
+# NOTE: this points at the venv interpreter, NOT /usr/bin/python3.
+#
+# The venv exists because pyntcore (NetworkTables) is pip-only. It is created
+# with --system-site-packages by scripts/install-service.sh, so apt packages
+# such as python3-yaml and python3-opencv stay visible inside it.
+#
+# This is a genuinely common and confusing failure: the script runs perfectly
+# when you launch it by hand (because your shell has the venv activated) and
+# then fails under systemd with ModuleNotFoundError (because systemd does not
+# source your shell profile and never activates anything). Point ExecStart at
+# the venv's python directly and the problem disappears. If you ever remove
+# the venv, change this back to /usr/bin/python3.
+ExecStart=/home/pi/vision/monitor/.venv/bin/python \
+    /home/pi/vision/monitor/src/health_monitor.py \
+    --config /home/pi/vision/monitor/config/config.yaml
+
+Restart=always
+RestartSec=2
+
+# systemd creates and chowns these, so the monitor never needs root:
+#   /var/lib/health-monitor  -> boot counter, clean-shutdown marker
+#   /var/log/health-monitor  -> buffered health records (if log_dir is set)
+# These names must match state_dir and log_dir in config/config.yaml.
+StateDirectory=health-monitor
+StateDirectoryMode=0755
+LogsDirectory=health-monitor
+LogsDirectoryMode=0755
+
+# A slight priority bump and OOM protection. Under load this is the process
+# least worth sacrificing, because it is the one recording what went wrong.
+Nice=-5
+OOMScoreAdjust=-500
+
+# A clean stop matters: SIGTERM is what writes the clean-shutdown marker.
+# Without it, the next boot gets recorded as a power cut that never happened.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+NoNewPrivileges=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=health-monitor
+
+[Install]
+WantedBy=multi-user.target

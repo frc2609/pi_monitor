@@ -1,0 +1,33 @@
+# Health monitor dependencies.
+#
+# Every dependency is one more thing that can break on a fresh Pi at
+# competition, so this list is deliberately short.
+
+# --- Deliberately NOT listed here ---------------------------------------
+#
+# OpenCV: provided by the system package python3-opencv (apt), version 4.10.x.
+#   Do NOT add opencv-python or opencv-contrib-python. A pip copy would shadow
+#   the apt one on sys.path and you would be reading docs for a version you
+#   are not running. See README, "Python packaging".
+#   The monitor does not import cv2 at all.
+#
+# PyYAML: install from apt instead, with `sudo apt install python3-yaml`.
+#   One package manager wherever possible, and apt's build updates with the
+#   rest of the system. The venv is created with --system-site-packages so
+#   apt packages remain visible inside it.
+#
+#   Why YAML at all, rather than a stdlib format like JSON: the config file is
+#   read and edited by students, and it needs comments explaining what each
+#   threshold means. JSON has no comments. That is worth one dependency that
+#   ships with Pi OS anyway.
+
+# --- Actually installed by pip ------------------------------------------
+
+# NetworkTables client, for publishing health data to /Vision/health.
+# pip-only — robotpy is not packaged in Debian. This is the single reason
+# this project needs a venv; see scripts/install-service.sh.
+#
+# Pin this to the robotpy release matching your competition season once you
+# know it (e.g. pyntcore==2026.3.2). An unpinned install the night before an
+# event is how you discover a breaking change at the worst possible moment.
+pyntcore

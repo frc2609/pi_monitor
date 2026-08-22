@@ -1,0 +1,90 @@
+# Health monitor configuration.
+#
+# Everything team-specific or environment-specific lives here, never in source.
+# The bench Pi and the robot Pi should differ ONLY in this file.
+#
+# This file is version controlled on purpose. It holds no secrets — a fresh
+# clone should give a Pi working defaults with no extra setup step.
+
+# Team number. This is the ONLY place it appears in the whole repo.
+# Used for the NetworkTables server lookup when nt_mode is "client".
+team: 2609
+
+# How this process talks to NetworkTables:
+#   server -> the Pi hosts NT. Bench work, no roboRIO present.
+#   client -> the Pi connects to the roboRIO. This is the robot setting.
+nt_mode: server
+
+# Explicit NT host or IP, overriding the team-number lookup. Useful when
+# pointing the Pi at a laptop running an NT server for testing.
+# Leave null on the robot so the team-number lookup is used.
+nt_server: null
+
+health:
+  # Seconds between samples. 1.0 is a good default: fast enough to catch a
+  # brownout inside a single match, slow enough to cost nothing.
+  # Sensible range 0.5 - 5.0. Below 0.5 you are mostly measuring vcgencmd.
+  interval_s: 1.0
+
+  # Publish health data to NetworkTables so it graphs in AdvantageScope
+  # alongside everything else. Numbers and booleans only, never strings.
+  nt_enabled: true
+  nt_table: Vision/health
+
+  # Created and chowned by systemd via StateDirectory / LogsDirectory, so the
+  # monitor never needs root. If you change these, change the unit file too.
+  state_dir: /var/lib/health-monitor
+  log_dir: /var/log/health-monitor     # null disables disk logging (journald only)
+
+  # Records buffer in RAM and are written to the card on this interval, so
+  # normal operation is not thousands of tiny writes. Anything that fails the
+  # health check forces an immediate flush regardless — evidence you did not
+  # write down is not evidence.
+  # Sensible range 30 - 300. Higher is kinder to the card but risks losing the
+  # last few seconds before a hard power cut.
+  flush_interval_s: 60.0
+
+  # A log line this often even when nothing has changed, so that silence means
+  # a dead process rather than a quiet one.
+  # Sensible range 60 - 900.
+  heartbeat_log_s: 300.0
+
+  # Hard cap on the in-RAM buffer. At 1 record/sec this is well over an hour of
+  # continuous change, and it only fills if the disk is unwritable.
+  buffer_max_records: 2000
+
+  # DEBUG / INFO / WARNING / ERROR. Passing --verbose on the command line
+  # overrides this. DEBUG is noisy; use it while developing, not on the robot.
+  log_level: INFO
+
+  # Services to watch. We do not manage these, we only report whether they are
+  # alive — a vision failure with the monitor still healthy is a useful signal.
+  watch_services:
+    - photonvision
+
+  # systemctl is comparatively slow, so it is checked every Nth sample rather
+  # than every one. At interval_s 1.0 this is a check every 10 seconds.
+  service_check_every_n: 10
+
+  # Crossing a threshold marks the sample as not-ok, which logs at ERROR and
+  # forces an immediate flush to disk.
+  thresholds:
+    temp_warn_c: 70.0             # log at WARNING; Pi 5 soft-throttles near 80
+    temp_crit_c: 80.0             # verdict fails
+    volts_min: 4.75               # 5V rail below this is a supply problem
+    mem_available_min_mb: 200.0
+    disk_free_min_mb: 500.0       # a full card corrupts logs and breaks vision
+
+  # Hysteresis for change detection. A reading must move by at least this much
+  # before it counts as a change worth logging. Without this, ordinary sensor
+  # noise on the temperature alone would produce a log line every second and
+  # bury the events that matter.
+  # Raise a value if that reading is chattering; lower it if you are missing
+  # movement you care about.
+  deltas:
+    temp_c: 2.0
+    volts: 0.05
+    power_w: 0.5
+    cpu_mhz: 100.0
+    mem_mb: 100.0
+    disk_mb: 100.0

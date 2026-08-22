@@ -1,0 +1,18 @@
+# This repo is edited on Windows laptops and runs on Linux.
+#
+# A shell script checked out with CRLF endings fails on the Pi with
+#     bad interpreter: /usr/bin/env bash^M
+# which names the interpreter and says nothing at all about line endings.
+# Forcing LF in the repo removes that failure mode permanently.
+
+* text=auto eol=lf
+
+*.sh        text eol=lf
+*.py        text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.service   text eol=lf
+*.md        text eol=lf
+
+# Executable bit on the installer, so it survives a clone onto the Pi.
+scripts/*.sh text eol=lf
