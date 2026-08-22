@@ -53,7 +53,7 @@ belongs in Java where it is testable in simulation and visible in match logs.
 > **Known issue right now:** the development Pi is running on a 900mA supply, far
 > below what a Pi 5 wants, and `vcgencmd get_throttled` reports `0x50000`. A proper
 > regulator is being sourced. See the `2026-08-21 — get_throttled returns 0x50000`
-> entry in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+> entry in [../docs/TROUBLESHOOTING.md](../docs/TROUBLESHOOTING.md).
 
 ## Setup from a bare Pi
 
@@ -237,7 +237,7 @@ systemctl status photonvision
 journalctl -u health-monitor -b
 ```
 
-Then read **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — a running log of
+Then read **[../docs/TROUBLESHOOTING.md](../docs/TROUBLESHOOTING.md)** — a running log of
 problems this team has actually hit and how they were solved. **Add to it when you
 solve something.** The entry nobody writes is the week somebody else loses.
 
@@ -249,15 +249,20 @@ monitor/
 ├── requirements.txt
 ├── config/
 │   └── config.yaml              team number, intervals, thresholds
-├── docs/
-│   └── TROUBLESHOOTING.md       running log - append to this
 ├── scripts/
 │   └── install-service.sh       idempotent; safe to re-run
 ├── services/
 │   └── health-monitor.service   systemd unit
-└── src/
-    └── health_monitor.py        the monitor itself
+├── src/
+│   └── health_monitor.py        the monitor itself
+└── tests/
+    └── test_change_detection.py runs anywhere; no Pi required
 ```
+
+**The troubleshooting log lives outside this repo**, at `vision/docs/`, because
+it covers the whole Pi platform rather than the monitor alone. That means a Pi
+that clones only this repo does **not** get it — worth knowing before you need
+it in the pits.
 
 Nothing here is prefixed with the team number. The team number appears in exactly one
 place: `config/config.yaml`, as a value. Code that is not team-specific should not look
