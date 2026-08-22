@@ -1,124 +1,65 @@
-# Health monitor configuration.
+# Health monitor settings.
 #
-# Everything team-specific or environment-specific lives here, never in source.
-# The bench Pi and the robot Pi should differ ONLY in this file.
-#
-# This file is version controlled on purpose. It holds no secrets — a fresh
-# clone should give a Pi working defaults with no extra setup step.
+# Everything team-specific or robot-specific lives here, never in the code.
+# Version controlled, so a fresh Pi works straight from a clone.
 
-# Team number. This is the ONLY place it appears in the whole repo.
-# Used for the NetworkTables server lookup when nt_mode is "client".
+# The only place the team number appears in this project.
 team: 2609
 
-# How this process talks to NetworkTables:
-#   server -> the Pi hosts NT. Bench work, no roboRIO present.
-#   client -> the Pi connects to the roboRIO. This is the robot setting.
+# server = this Pi hosts NetworkTables (bench, no roboRIO present)
+# client = this Pi connects to the roboRIO (on the robot)
 nt_mode: server
 
-# Explicit NT host or IP, overriding the team-number lookup. Useful when
-# pointing the Pi at a laptop running an NT server for testing.
-# Leave null on the robot so the team-number lookup is used.
+# Explicit NT host or IP, overriding the team lookup. Leave null on the robot.
 nt_server: null
 
 health:
-  # Seconds between samples. 1.0 is a good default: fast enough to catch a
-  # brownout inside a single match, cheap enough to ignore.
-  #
-  # Each sample spawns four vcgencmd subprocesses (throttled, temp, clock,
-  # pmic), so the floor is set by how long those take on your Pi. Nobody has
-  # measured it here yet - do that before going below ~0.2s:
-  #     time (for i in $(seq 20); do
-  #             vcgencmd get_throttled  >/dev/null
-  #             vcgencmd measure_temp   >/dev/null
-  #             vcgencmd measure_clock arm >/dev/null
-  #             vcgencmd pmic_read_adc  >/dev/null
-  #           done)
-  # Divide by 20 for the per-sample cost. Keep the interval well above it.
+  # Seconds between samples. Each sample runs four vcgencmd commands, so time
+  # those before going below about 0.2s.
   interval_s: 1.0
 
-  # Publish health data to NetworkTables so it graphs in AdvantageScope
-  # alongside everything else. Numbers and booleans only, never strings.
   nt_enabled: true
   nt_table: Vision/health
 
-  # Created and chowned by systemd via StateDirectory / LogsDirectory, so the
-  # monitor never needs root. If you change these, change the unit file too.
+  # systemd creates these. If you change them, change the unit file to match.
   state_dir: /var/lib/health-monitor
-  log_dir: /var/log/health-monitor     # null disables disk logging (journald only)
+  log_dir: /var/log/health-monitor     # null = journal only, no file on disk
 
-  # Records buffer in RAM and are written to the card on this interval.
-  #
-  # SIZED AGAINST MATCH LENGTH. A match is under three minutes, so anything
-  # still in RAM when the power cuts is a chunk of THAT match's evidence -
-  # and a hard power cut is the event this whole service exists to witness.
-  # At 10s we risk losing the last ~7% of a match. At the old 60s it was
-  # closer to 40%, which is not a watchdog, it is a rumour.
-  #
-  # Card wear was the argument for a longer interval and it does not hold up:
-  # log-on-change means quiet periods write nothing at all, and a competition
-  # day is well under an hour of actual match time.
-  #
-  # Anything failing the health check forces an immediate flush regardless.
+  # A match is under 3 minutes, and whatever is still in RAM when the power
+  # cuts is lost. Anything failing the health check flushes immediately.
   flush_interval_s: 10.0
 
-  # A log line this often even when nothing has changed, so that silence means
-  # a dead process rather than a quiet one.
-  #
-  # MUST BE WELL UNDER MATCH LENGTH. This was 300s, longer than a whole
-  # match - which meant a clean match where nothing changed state produced
-  # no heartbeat at all, and "the monitor was healthy and quiet" was
-  # indistinguishable from "the monitor died before the match started".
-  # At 30s a match contains several, so liveness is provable and a failure
-  # can be bracketed to a 30s window.
+  # A "still alive" line even when nothing changes. Keep well under match
+  # length, or a quiet match looks the same as a dead monitor.
   heartbeat_log_s: 30.0
 
-  # Hard cap on the in-RAM buffer - a safety valve, not a tuning knob. Records
-  # only accrue on change or heartbeat, so in practice this holds many hours
-  # and only fills if the disk has become unwritable.
+  # Safety cap on the RAM buffer. Only fills if the disk stops accepting writes.
   buffer_max_records: 2000
 
-  # DEBUG / INFO / WARNING / ERROR. Passing --verbose on the command line
-  # overrides this. DEBUG is noisy; use it while developing, not on the robot.
-  log_level: INFO
+  log_level: INFO      # DEBUG / INFO / WARNING / ERROR. --verbose overrides this.
 
-  # Services to watch. We do not manage these, we only report whether they are
-  # alive — a vision failure with the monitor still healthy is a useful signal.
+  # Watched, not managed - we only report whether they are running.
   watch_services:
     - photonvision
 
-  # systemctl is comparatively slow, so it is checked every Nth sample rather
-  # than every one. At interval_s 1.0 this is a check every 5 seconds, which
-  # bounds how long PhotonVision can be dead before the log knows - roughly 3%
-  # of a match rather than the 7% that every-10th gave.
+  # systemctl is slow, so check every Nth sample. At interval_s 1.0 that is 5s.
   service_check_every_n: 5
 
-  # Crossing a threshold marks the sample as not-ok, which logs at ERROR and
-  # forces an immediate flush to disk.
+  # Crossing any of these marks the sample bad: logs at ERROR, flushes at once.
   thresholds:
-    temp_warn_c: 70.0             # log at WARNING; Pi 5 soft-throttles near 80
-    temp_crit_c: 80.0             # verdict fails
-    volts_min: 4.75               # 5V rail below this is a supply problem
+    temp_warn_c: 70.0            # warning only
+    temp_crit_c: 80.0            # Pi 5 starts throttling itself around here
+    volts_min: 4.75              # 5V rail below this means a supply problem
     mem_available_min_mb: 200.0
-    disk_free_min_mb: 500.0       # a full card corrupts logs and breaks vision
+    disk_free_min_mb: 500.0
 
-  # Hysteresis for change detection: a reading must move at least this far
-  # FROM THE LAST VALUE LOGGED before it counts as a change worth writing down.
-  # Without it, ordinary sensor noise would produce a log line every second and
-  # bury the events that matter.
-  #
-  # Note "from the last value logged". This is not the same as rounding readings
-  # into fixed buckets and watching the bucket number - that has boundaries, and
-  # a reading parked on one chatters across it on noise alone, producing exactly
-  # the flood the mechanism exists to prevent. See changed() in health_monitor.py.
-  #
-  # Raise a value if that reading is chattering; lower it if you are missing
+  # How far a reading must move from the last value LOGGED before it counts as
+  # a change worth recording. Keeps sensor noise out of the log.
+  # Raise one if that reading is chattering; lower it if you are missing
   # movement you care about.
   deltas:
     temp_c: 2.0
-    # Voltage is THE signal for this tool and the alarm threshold is 4.75, so
-    # 50mV granularity gave only ~7 distinguishable steps between healthy and
-    # alarming. 20mV makes a sag legible as a curve instead of a cliff.
-    volts: 0.02
+    volts: 0.02      # the main signal here, and the alarm sits at 4.75
     power_w: 0.25
     cpu_mhz: 100.0
     mem_mb: 100.0

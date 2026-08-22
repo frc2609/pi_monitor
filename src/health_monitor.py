@@ -1,30 +1,23 @@
 #!/usr/bin/env python3
 """
-Vision coprocessor — health monitor / power watchdog.
+Vision coprocessor - health monitor / power watchdog.
 
-Runs as its own systemd service, deliberately NOT as a child of the vision
-process. If a brownout kills PhotonVision, this is what survives to say why.
+Runs as its own systemd service, NOT as a child of the vision process. If a
+brownout kills PhotonVision, this is what survives to say why.
 
-What it watches:
-  - vcgencmd get_throttled       undervoltage / capping / throttling, now and since boot
-  - vcgencmd measure_temp        SoC temperature
-  - vcgencmd measure_clock arm   actual ARM clock (proves capping, not just the flag)
-  - vcgencmd pmic_read_adc       real rail volts and amps, not just fault flags
-  - boot id + clean-shutdown marker   distinguishes a brownout reset from a clean stop
-  - memory, disk, load, uptime
-  - systemd state of the vision services
+Watches: get_throttled (undervoltage and throttling, now and since boot),
+temperature, actual ARM clock, PMIC volts and amps, boot id against a
+clean-shutdown marker, memory, disk, load, uptime, and whether the vision
+services are running.
 
-Logging discipline (per operating standards §10):
-  - log on change, not every sample
-  - buffer records in RAM, flush to disk on an interval
-  - log the *inputs* to a decision, not just the verdict
-
-NetworkTables: numbers and booleans only. Never formatted strings.
+Logs on change, buffers in RAM, and records the inputs to a decision rather
+than just the verdict. Publishes numbers and booleans to NetworkTables -
+never formatted strings, which don't graph.
 
 Usage:
     health_monitor.py --config /home/pi/vision/monitor/config/config.yaml
-    health_monitor.py --once          # one human-readable sample, then exit
-    health_monitor.py --once --json   # one machine-readable sample, then exit
+    health_monitor.py --once          # one readable sample, then exit
+    health_monitor.py --once --json   # same, machine-readable
 """
 
 from __future__ import annotations
@@ -208,17 +201,12 @@ PMIC_LINE = re.compile(r"\s*(\S+?)_(A|V)\s+(?:current|volt)\(\d+\)=([0-9.]+)[AV]
 
 def read_pmic() -> dict[str, Any]:
     """
-    Parse `vcgencmd pmic_read_adc` into per-rail volts/amps.
+    Parse `vcgencmd pmic_read_adc` into per-rail volts and amps. Lines look
+    like `3V3_SYS_A current(1)=0.02514000A` or `EXT5V_V volt(24)=5.09680000V`.
 
-    Output looks like:
-        3V3_SYS_A current(1)=0.02514000A
-        3V3_SYS_V volt(2)=3.30840000V
-        EXT5V_V volt(24)=5.09680000V
-
-    EXT5V_V is the input rail and has no paired current channel, so total draw
-    is estimated by summing V*I across the rails that do pair up. It's an
-    estimate, not a wall-plug measurement — but it moves when the load moves,
-    which is what matters for spotting a supply that can't keep up.
+    EXT5V is the input rail and has no current channel, so total draw is
+    estimated by summing V*I over the rails that do pair up. An estimate, but
+    it moves when the load moves, which is what spots a failing supply.
     """
     out = vcgencmd("pmic_read_adc")
     result: dict[str, Any] = {"volts_in": None, "power_w": None, "rails": {}}
@@ -303,12 +291,10 @@ def service_active(name: str) -> bool | None:
 
 class BootState:
     """
-    Survives reboots so we can tell a clean stop from a power cut.
-
-    On a robot, `uptime` alone lies to you: a Pi that browned out and rebooted
-    mid-match looks identical to one that just started. Comparing the kernel's
-    boot_id against what we saw last run — plus a marker we only write on a
-    clean SIGTERM — makes that distinction visible.
+    Survives reboots so we can tell a clean stop from a power cut. Uptime
+    alone can't: a Pi that browned out mid-match looks like one that just
+    started. Comparing the kernel's boot_id against last run, plus a marker
+    written only on a clean SIGTERM, makes the difference visible.
     """
 
     def __init__(self, state_dir: str, read_only: bool = False):
@@ -364,9 +350,7 @@ class BootState:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
             # fsync before the rename, or the rename can land while the
-            # contents are still in the page cache. This file's entire job
-            # is surviving a power cut, so durability is the requirement,
-            # not atomicity alone.
+            # contents are still in the page cache.
             with tmp.open("w") as f:
                 f.write(json.dumps(payload))
                 f.flush()
@@ -394,10 +378,8 @@ class BootState:
 
 class NTPublisher:
     """
-    Publishes flat numbers and booleans under the health table.
-
-    Strings are dropped on purpose — they don't graph in AdvantageScope and
-    can't be consumed without parsing.
+    Publishes flat numbers and booleans under the health table. Strings are
+    dropped on purpose: they don't graph in AdvantageScope.
     """
 
     def __init__(self, cfg: dict):
@@ -500,10 +482,9 @@ class HealthMonitor:
         self.last_discrete: tuple | None = None
         self.last_logged: dict[str, Any] = {}
 
-        # Throttle bits latched at start-of-service, so we can report "since I
-        # started watching" separately from "since boot". The since-boot bits
-        # persist across soft reboots and will happily mislead you into
-        # re-debugging yesterday's brownout.
+        # Throttle bits latched at startup, so "since I started watching" is
+        # separate from "since boot" - the since-boot bits survive a soft
+        # reboot and will have you re-debugging yesterday's brownout.
         self.baseline_throttled: int | None = None
         self.sticky_since_start = 0
         self.service_cache: dict[str, bool | None] = {}
@@ -603,16 +584,11 @@ class HealthMonitor:
         """
         True when this sample differs meaningfully from the last one LOGGED.
 
-        Continuous values must have moved at least their delta away from the
-        last value we actually wrote down. That is hysteresis.
-
-        This used to quantise onto a fixed grid - int(value / delta) - and
-        compare bucket numbers. That looks like hysteresis and is not: a
-        reading parked on a bucket boundary flips bucket on pure sensor noise
-        and logs on EVERY sample. With volts at a 0.05 delta, a rail sitting
-        at 4.900V would have chattered across the 98/99 boundary once a second
-        forever, burying the events actually worth reading. Comparing against
-        the last logged value has no boundaries to sit on.
+        Continuous values must move at least their delta away from the last
+        value written down. Note "from the last value logged" - rounding
+        readings into fixed buckets and watching the bucket number looks
+        equivalent but isn't, because a reading parked on a bucket boundary
+        flips across it on noise alone and logs every sample.
         """
         discrete = self.discrete_signature(s)
         if self.last_discrete is None:
@@ -691,17 +667,12 @@ class HealthMonitor:
                     f.write(json.dumps(record, default=str) + "\n")
                 f.flush()              # Python buffer -> kernel
                 os.fsync(f.fileno())   # kernel page cache -> the actual card
-                #
-                # Without that fsync the flush interval means very little:
-                # closing a file hands data to the page cache, which writes
-                # back on its own schedule tens of seconds later. A hard
-                # power cut - the event this service exists to witness -
-                # takes anything still sitting there.
+                # Without the fsync, closing the file only reaches the page
+                # cache, which writes back tens of seconds later - and a power
+                # cut takes whatever is still sitting there.
         except OSError as e:
-            # Keep them. The deque is bounded by maxlen, so it cannot grow
-            # without limit - the previous version cleared it here, throwing
-            # away recoverable evidence to solve a problem maxlen had
-            # already solved.
+            # Keep the records and retry. maxlen already bounds the buffer,
+            # so there is no need to throw evidence away here.
             LOG.error("could not flush health log to %s: %s "
                       "(%d record(s) still buffered, will retry)",
                       path, e, len(records))
@@ -743,11 +714,8 @@ class HealthMonitor:
                     self.buffer_record(s)
                     self.last_heartbeat_log = now
                     if not s["ok"]:
-                        # A state that goes bad and STAYS bad stops changing,
-                        # so the signature branch above never fires again and
-                        # these heartbeats are the only ongoing record of it.
-                        # Losing them to the power cut that ended the match
-                        # would be losing the middle of the story.
+                        # A state that goes bad and stays bad stops changing,
+                        # so these heartbeats become the only ongoing record.
                         self.flush(force=True)
 
                 self.flush()
