@@ -22,8 +22,18 @@ nt_server: null
 
 health:
   # Seconds between samples. 1.0 is a good default: fast enough to catch a
-  # brownout inside a single match, slow enough to cost nothing.
-  # Sensible range 0.5 - 5.0. Below 0.5 you are mostly measuring vcgencmd.
+  # brownout inside a single match, cheap enough to ignore.
+  #
+  # Each sample spawns four vcgencmd subprocesses (throttled, temp, clock,
+  # pmic), so the floor is set by how long those take on your Pi. Nobody has
+  # measured it here yet - do that before going below ~0.2s:
+  #     time (for i in $(seq 20); do
+  #             vcgencmd get_throttled  >/dev/null
+  #             vcgencmd measure_temp   >/dev/null
+  #             vcgencmd measure_clock arm >/dev/null
+  #             vcgencmd pmic_read_adc  >/dev/null
+  #           done)
+  # Divide by 20 for the per-sample cost. Keep the interval well above it.
   interval_s: 1.0
 
   # Publish health data to NetworkTables so it graphs in AdvantageScope
