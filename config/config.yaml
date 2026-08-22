@@ -46,21 +46,35 @@ health:
   state_dir: /var/lib/health-monitor
   log_dir: /var/log/health-monitor     # null disables disk logging (journald only)
 
-  # Records buffer in RAM and are written to the card on this interval, so
-  # normal operation is not thousands of tiny writes. Anything that fails the
-  # health check forces an immediate flush regardless — evidence you did not
-  # write down is not evidence.
-  # Sensible range 30 - 300. Higher is kinder to the card but risks losing the
-  # last few seconds before a hard power cut.
-  flush_interval_s: 60.0
+  # Records buffer in RAM and are written to the card on this interval.
+  #
+  # SIZED AGAINST MATCH LENGTH. A match is under three minutes, so anything
+  # still in RAM when the power cuts is a chunk of THAT match's evidence -
+  # and a hard power cut is the event this whole service exists to witness.
+  # At 10s we risk losing the last ~7% of a match. At the old 60s it was
+  # closer to 40%, which is not a watchdog, it is a rumour.
+  #
+  # Card wear was the argument for a longer interval and it does not hold up:
+  # log-on-change means quiet periods write nothing at all, and a competition
+  # day is well under an hour of actual match time.
+  #
+  # Anything failing the health check forces an immediate flush regardless.
+  flush_interval_s: 10.0
 
   # A log line this often even when nothing has changed, so that silence means
   # a dead process rather than a quiet one.
-  # Sensible range 60 - 900.
-  heartbeat_log_s: 300.0
+  #
+  # MUST BE WELL UNDER MATCH LENGTH. This was 300s, longer than a whole
+  # match - which meant a clean match where nothing changed state produced
+  # no heartbeat at all, and "the monitor was healthy and quiet" was
+  # indistinguishable from "the monitor died before the match started".
+  # At 30s a match contains several, so liveness is provable and a failure
+  # can be bracketed to a 30s window.
+  heartbeat_log_s: 30.0
 
-  # Hard cap on the in-RAM buffer. At 1 record/sec this is well over an hour of
-  # continuous change, and it only fills if the disk is unwritable.
+  # Hard cap on the in-RAM buffer - a safety valve, not a tuning knob. Records
+  # only accrue on change or heartbeat, so in practice this holds many hours
+  # and only fills if the disk has become unwritable.
   buffer_max_records: 2000
 
   # DEBUG / INFO / WARNING / ERROR. Passing --verbose on the command line

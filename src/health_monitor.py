@@ -61,8 +61,9 @@ DEFAULTS: dict[str, Any] = {
         "nt_table": "Vision/health",
         "state_dir": "/var/lib/health-monitor",
         "log_dir": None,              # None => no disk logging, journald only
-        "flush_interval_s": 60.0,
-        "heartbeat_log_s": 300.0,     # periodic "still fine" line even with no change
+        # Both sized against match length (<3 min), not against card wear.
+        "flush_interval_s": 10.0,
+        "heartbeat_log_s": 30.0,      # periodic "still fine" line even with no change
         "buffer_max_records": 2000,
         "log_level": "INFO",        # DEBUG/INFO/WARNING/ERROR; --verbose overrides
         "watch_services": ["photonvision"],
@@ -673,6 +674,13 @@ class HealthMonitor:
                     self.log_sample(s, "heartbeat")
                     self.buffer_record(s)
                     self.last_heartbeat_log = now
+                    if not s["ok"]:
+                        # A state that goes bad and STAYS bad stops changing,
+                        # so the signature branch above never fires again and
+                        # these heartbeats are the only ongoing record of it.
+                        # Losing them to the power cut that ended the match
+                        # would be losing the middle of the story.
+                        self.flush(force=True)
 
                 self.flush()
             except Exception:

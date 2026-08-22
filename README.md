@@ -52,8 +52,8 @@ belongs in Java where it is testable in simulation and visible in match logs.
 
 > **Known issue right now:** the development Pi is running on a 900mA supply, far
 > below what a Pi 5 wants, and `vcgencmd get_throttled` reports `0x50000`. A proper
-> regulator is being sourced. See the seed entry in
-> [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+> regulator is being sourced. See the `2026-08-21 — get_throttled returns 0x50000`
+> entry in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## Setup from a bare Pi
 
@@ -139,13 +139,16 @@ service began watching.* **During a match, that is the number that means somethi
 - **On change, not on every sample.** Continuous logging buries the signal and wears
   out the SD card. Continuous values are bucketed with a hysteresis band so sensor
   noise alone does not count as a change.
-- **Heartbeat every 5 minutes** regardless, so silence means a dead process rather
-  than a quiet one.
+- **Heartbeat every 30 seconds** regardless, so silence means a dead process rather
+  than a quiet one. This is deliberately well under match length — a heartbeat
+  longer than a match means a clean match can produce no record at all, and you
+  cannot tell a healthy quiet monitor from one that died before the match started.
 - **Log the inputs to a decision, never just the verdict.** "Rejected" tells you
   nothing. "temp=81.0C exceeds crit 80.0" tells you what to do.
-- Records buffer in RAM and flush to disk once a minute — except when something is
-  wrong, which forces an immediate flush. Evidence you did not write down is not
-  evidence.
+- Records buffer in RAM and flush to disk every 10 seconds — and immediately when
+  anything fails the health check. Evidence you did not write down is not evidence,
+  and a hard power cut is the event this service exists to witness: whatever is
+  still in RAM when the power goes is gone. Ten seconds is roughly 7% of a match.
 
 Everything also reaches the journal: `journalctl -u health-monitor -f`.
 
