@@ -918,7 +918,9 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
-        stream=sys.stdout,
+        # stderr, not stdout: --json writes the sample to stdout and log lines
+        # would corrupt it. systemd sends both to the journal either way.
+        stream=sys.stderr,
     )
 
     cfg = load_config(args.config)
