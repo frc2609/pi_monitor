@@ -195,6 +195,15 @@ Health data publishes to `/Vision/health` as **numbers and booleans only.** Neve
 formatted strings — strings do not graph in AdvantageScope and cannot be consumed
 without parsing.
 
+Everything is republished **every sample**, so the `heartbeat` counter updates
+once a second. That is what robot code should watch to know the monitor is
+alive — not the log, which only writes when something changes.
+
+A reading that stops answering publishes **NaN**, which AdvantageScope draws as
+a gap. Skipping the publish would leave the topic holding its last value, so a
+dead sensor would look like a healthy frozen one. Booleans have no NaN, so a
+missing boolean keeps its last state — worth knowing when reading a trace.
+
 Set `nt_mode` in [config/config.yaml](config/config.yaml): `server` on the bench when
 no roboRIO is present, `client` on the robot.
 

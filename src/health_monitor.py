@@ -57,7 +57,7 @@ DEFAULTS: dict[str, Any] = {
         "log_dir": None,              # None => no disk logging, journald only
         # Both sized against match length (<3 min), not against card wear.
         "flush_interval_s": 10.0,
-        "heartbeat_log_s": 30.0,      # periodic "still fine" line even with no change
+        "heartbeat_log_s": 10.0,      # periodic "still fine" line even with no change
         "buffer_max_records": 2000,
         "log_level": "INFO",        # DEBUG/INFO/WARNING/ERROR; --verbose overrides
         "watch_services": ["photonvision"],
@@ -451,6 +451,7 @@ class NTPublisher:
         h = cfg["health"]
         self.enabled = bool(h["nt_enabled"])
         self.pubs: dict[str, Any] = {}
+        self.numeric: dict[str, bool] = {}   # key -> is it a double topic
         self.table = None
         self.inst = None
         if not self.enabled:
@@ -491,21 +492,36 @@ class NTPublisher:
         if not self.enabled or self.table is None:
             return
         for key, value in flat.items():
-            if value is None or isinstance(value, str):
+            if isinstance(value, str):
+                continue
+            if value is None:
+                # NaN rather than skipping. Skipping leaves the topic holding
+                # its last value, so a sensor that stopped answering reads as a
+                # healthy frozen one. AdvantageScope draws NaN as a gap.
+                # Booleans have no NaN, so a missing boolean keeps its last
+                # state - there is nothing better to send.
+                pub = self.pubs.get(key)
+                if pub is not None and self.numeric.get(key):
+                    self._set(key, pub, float("nan"))
                 continue
             pub = self.pubs.get(key)
             if pub is None:
-                if isinstance(value, bool):
+                if isinstance(value, bool):     # bool before int: bools are ints
                     pub = self.table.getBooleanTopic(key).publish()
+                    self.numeric[key] = False
                 elif isinstance(value, (int, float)):
                     pub = self.table.getDoubleTopic(key).publish()
+                    self.numeric[key] = True
                 else:
                     continue
                 self.pubs[key] = pub
-            try:
-                pub.set(value if isinstance(value, bool) else float(value))
-            except Exception as e:  # never let a publish failure kill the watchdog
-                LOG.debug("publish failed for %s: %s", key, e)
+            self._set(key, pub, value if isinstance(value, bool) else float(value))
+
+    def _set(self, key: str, pub: Any, value: Any) -> None:
+        try:
+            pub.set(value)
+        except Exception as e:  # never let a publish failure kill the watchdog
+            LOG.debug("publish failed for %s: %s", key, e)
 
     def status(self) -> dict[str, Any]:
         """

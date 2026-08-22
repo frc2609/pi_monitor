@@ -29,9 +29,11 @@ health:
   # cuts is lost. Anything failing the health check flushes immediately.
   flush_interval_s: 10.0
 
-  # A "still alive" line even when nothing changes. Keep well under match
-  # length, or a quiet match looks the same as a dead monitor.
-  heartbeat_log_s: 30.0
+  # A "still alive" record even when nothing changes. This only affects the
+  # log and the file - the NetworkTables heartbeat counter updates every
+  # sample, so live dead-process detection is already 1s.
+  # 10s bounds how stale the file can be when the Pi dies mid-match.
+  heartbeat_log_s: 10.0
 
   # Safety cap on the RAM buffer. Only fills if the disk stops accepting writes.
   buffer_max_records: 2000
