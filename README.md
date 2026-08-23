@@ -30,8 +30,12 @@ where you can test the decision in simulation.
 
 Raspberry Pi 5 8GB, headless over SSH.
 
-Power is 5V/5A (27W), and it matters more than anything else here. If the Pi doesn't
-negotiate a 5A supply over USB-PD, the firmware caps all USB peripherals at 600mA
-combined. It raises that to 1.6A once it does. A single camera draws roughly 500mA and
-we expect to run more than one, so an undersized supply doesn't just throttle the CPU,
-it starves the cameras.
+Power is 5V/5A (27W). Two separate things go wrong below that.
+
+The firmware caps all USB peripherals at 600mA combined unless it negotiates a 5A
+supply, in which case it allows 1.6A. That becomes a problem as soon as you run more
+than one camera.
+
+And if the supply can't hold 5V under load, the Pi throttles the CPU to survive. That
+is the `0x50000` this monitor exists to catch, and it looks like a software bug when
+you hit it.
