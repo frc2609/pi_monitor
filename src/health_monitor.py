@@ -429,17 +429,22 @@ def sd_notify(message: str) -> bool:
 
 
 def read_last_records(log_dir: Path, count: int = 5,
-                      exclude: Path | None = None) -> list[dict]:
+                      exclude: Path | None = None,
+                      path: Path | None = None) -> list[dict]:
     """
     Last few records from the newest health log, skipping `exclude` so we never
     read the file this run is writing. Used after an unclean boot to show what
     the Pi was doing just before the power went.
     """
     try:
-        files = [p for p in sorted(log_dir.glob("health_*.jsonl")) if p != exclude]
-        if not files:
-            return []
-        with files[-1].open("rb") as f:          # tail, not the whole file
+        if path is not None and path.exists():
+            chosen = path
+        else:
+            files = [p for p in sorted(log_dir.glob("health_*.jsonl")) if p != exclude]
+            if not files:
+                return []
+            chosen = files[-1]
+        with chosen.open("rb") as f:          # tail, not the whole file
             f.seek(0, os.SEEK_END)
             f.seek(max(0, f.tell() - 65536))
             lines = f.read().decode("utf-8", "replace").splitlines()
@@ -509,6 +514,7 @@ class BootState:
         self.brownout_boots = 0
         self.starts_this_boot = 1
         self.log_file: str | None = None
+        self.previous_log_file: str | None = None
         self.last_boot_was_unclean = False
         self._load_and_update()
 
@@ -530,6 +536,11 @@ class BootState:
         if prev_boot_id != self.boot_id:
             # Genuinely a new boot, not just a service restart within one boot.
             self.boot_count += 1
+            # Keep the previous boot's file so report_previous_boot reads the
+            # right one. Sorting filenames worked until a counter reset made a
+            # second b00001, after which boot numbers no longer rose with time
+            # and the newest name was not the newest boot.
+            self.previous_log_file = prev_log_file
             if prev_boot_id is not None and not prev_clean:
                 self.unclean_boots += 1
                 self.last_boot_was_unclean = True
@@ -914,7 +925,10 @@ class HealthMonitor:
         """After an unclean boot, say when it happened and what it looked like."""
         if not self.state.last_boot_was_unclean or self.log_dir is None:
             return
-        records = read_last_records(self.log_dir, exclude=self.log_path)
+        previous = self.state.previous_log_file
+        records = read_last_records(
+            self.log_dir, exclude=self.log_path,
+            path=Path(previous) if previous else None)
         if not records:
             LOG.warning("previous boot ended uncleanly, but no log records "
                         "survived to say what happened")
