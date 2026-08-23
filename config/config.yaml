@@ -75,9 +75,13 @@ thresholds:
 # Raise one if that reading is chattering; lower it if you are missing movement
 # you care about.
 deltas:
-  temp_c: 2.0
+  temp_c: 4.0        # idles with a ~2.2C swing, so 2.0 oscillated across it
   volts: 0.05
   power_w: 0.5
-  cpu_mhz: 100.0
   mem_mb: 100.0
   disk_mb: 100.0
+
+# cpu_mhz has no entry on purpose. An idle Pi scales between 1500 and 2400MHz
+# constantly, so no tolerance works - it would log on every idle and every wake.
+# It is still recorded and published, it just does not trigger a line.
+# Throttling shows up in the throttle bits, which log immediately anyway.
