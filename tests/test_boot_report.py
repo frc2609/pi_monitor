@@ -56,12 +56,15 @@ def monitor_with_log(tmp, volts):
 def report(mon, unclean=True):
     cap = Captured()
     log = logging.getLogger("health-monitor")
+    previous = log.level
     log.addHandler(cap)
+    log.setLevel(logging.DEBUG)   # the "normal power-off" verdict logs at INFO
     try:
         mon.state.last_boot_was_unclean = unclean
         mon.report_previous_boot()
     finally:
         log.removeHandler(cap)
+        log.setLevel(previous)
     return cap.text()
 
 
@@ -69,18 +72,22 @@ def report(mon, unclean=True):
 with tempfile.TemporaryDirectory() as tmp:
     mon, logs = monitor_with_log(tmp, [5.10, 5.02, 4.93, 4.81, 4.68])
     out = report(mon)
-    assert "brownout" in out, out
+    assert "BROWNOUT" in out, out
     assert "4.68V" in out, out
+    assert mon.state.brownout_boots == 1, mon.state.brownout_boots
     assert len(read_last_records(logs)) == 5
-    print("PASS  falling voltage reads as a brownout")
+    print("PASS  falling voltage reads as a brownout, and is counted")
 
 # Healthy right up to the cut -> something disconnected it.
 with tempfile.TemporaryDirectory() as tmp:
     mon, _ = monitor_with_log(tmp, [5.10, 5.09, 5.10, 5.09, 5.10])
     out = report(mon)
-    assert "disconnected" in out, out
-    assert "brownout rather" not in out, out
-    print("PASS  steady voltage reads as power being disconnected")
+    assert "normal power-off" in out, out
+    assert "BROWNOUT" not in out, out
+    # This is the case that matters on a robot: killing the main breaker never
+    # sends SIGTERM, so every boot is "unclean". It must not count as a fault.
+    assert mon.state.brownout_boots == 0, mon.state.brownout_boots
+    print("PASS  steady voltage reads as a normal power-off, not counted")
 
 # Unclean boot, but the log did not survive.
 with tempfile.TemporaryDirectory() as tmp:

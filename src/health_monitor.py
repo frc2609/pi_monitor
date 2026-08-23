@@ -359,6 +359,7 @@ class BootState:
         self.boot_id = read_boot_id()
         self.boot_count = 0
         self.unclean_boots = 0
+        self.brownout_boots = 0
         self.starts_this_boot = 1
         self.last_boot_was_unclean = False
         self._load_and_update()
@@ -372,6 +373,7 @@ class BootState:
 
         self.boot_count = int(prev.get("boot_count", 0))
         self.unclean_boots = int(prev.get("unclean_boots", 0))
+        self.brownout_boots = int(prev.get("brownout_boots", 0))
         prev_boot_id = prev.get("boot_id")
         prev_clean = bool(prev.get("clean_shutdown", True))
         prev_starts = int(prev.get("starts_this_boot", 0))
@@ -382,10 +384,13 @@ class BootState:
             if prev_boot_id is not None and not prev_clean:
                 self.unclean_boots += 1
                 self.last_boot_was_unclean = True
-                LOG.warning(
-                    "previous boot ended without a clean shutdown "
-                    "(prev_boot_id=%s, clean_marker=false) — power cut or brownout reset. "
-                    "unclean_boots=%d", prev_boot_id, self.unclean_boots)
+                # On the robot this is EVERY boot - killing the main breaker
+                # never sends SIGTERM. The count is power cycles, not faults.
+                # brownout_boots below is the number that means something.
+                LOG.info("previous boot ended without a clean shutdown "
+                         "(prev_boot_id=%s) - normal on a robot, where power is "
+                         "cut at the breaker. unclean_boots=%d",
+                         prev_boot_id, self.unclean_boots)
         else:
             self.starts_this_boot = prev_starts + 1
             LOG.info("service restarted within the same boot (start #%d)",
@@ -407,6 +412,7 @@ class BootState:
             "boot_id": self.boot_id,
             "boot_count": self.boot_count,
             "unclean_boots": self.unclean_boots,
+            "brownout_boots": self.brownout_boots,
             "starts_this_boot": self.starts_this_boot,
             "clean_shutdown": clean,
             "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -435,6 +441,11 @@ class BootState:
 
     def mark_clean(self) -> None:
         self._write(clean=True)
+
+    def record_brownout(self) -> None:
+        """The previous boot ended in a sag, not in someone cutting power."""
+        self.brownout_boots += 1
+        self._write(clean=False)
 
 
 # ---------------------------------------------------------------------------
@@ -681,6 +692,9 @@ class HealthMonitor:
             "uptime_s": read_uptime_s(),
             "boot_count": self.state.boot_count,
             "unclean_boots": self.state.unclean_boots,
+            # unclean_boots is just power cycles on a robot. This is the count
+            # that means something.
+            "brownout_boots": self.state.brownout_boots,
             "starts_this_boot": self.state.starts_this_boot,
             "last_boot_unclean": self.state.last_boot_was_unclean,
             # False means the card is refusing writes. Only the journal would
@@ -734,9 +748,9 @@ class HealthMonitor:
             except (KeyError, ValueError, OSError):
                 return "??:??:??"
 
-        LOG.warning("previous boot ended uncleanly - last record at %s "
-                    "(clock is only trustworthy if the Pi has an RTC battery "
-                    "or reached a time server)", when(records[-1]))
+        LOG.info("previous boot ended without a clean shutdown - last record at "
+                 "%s (clock is only trustworthy if the Pi has an RTC battery or "
+                 "reached a time server)", when(records[-1]))
         for r in records:
             LOG.warning("  %s vin=%s temp=%s load=%s ok=%s", when(r),
                         fmt(r.get("volts_in"), "V", 2),
@@ -744,13 +758,31 @@ class HealthMonitor:
                         fmt(r.get("load1"), "", 2),
                         r.get("ok"))
 
+        # Distinguishing a brownout from someone opening the main breaker.
+        #
+        # "Unclean" on its own means nothing on a robot: cutting the breaker
+        # never sends SIGTERM, so EVERY boot is unclean. What separates a fault
+        # from a normal power-off is what the Pi was doing just before it went.
+        #
+        # Undervoltage is the strong signal - the firmware latches those bits,
+        # and opening a breaker does not set them. A falling voltage trend is
+        # the weaker backup for a sag too brief to have tripped a bit.
         volts = [r["volts_in"] for r in records if r.get("volts_in") is not None]
-        if len(volts) >= 2 and volts[-1] < volts[0]:
-            LOG.warning("  voltage was falling before power was lost - reads as a "
-                        "brownout rather than something disconnecting it")
+        undervolted = any(r.get("undervoltage_since_start")
+                          or r.get("undervoltage_now")
+                          or r.get("throttled_since_start") for r in records)
+        sagging = len(volts) >= 2 and volts[-1] < volts[0]
+
+        if undervolted or sagging:
+            self.state.record_brownout()
+            LOG.error("  BROWNOUT: %s before power was lost. This was not a normal "
+                      "power-off. brownout_boots=%d",
+                      "undervoltage was flagged" if undervolted
+                      else "voltage was falling",
+                      self.state.brownout_boots)
         elif volts:
-            LOG.warning("  voltage looked healthy right up to the cut - reads as "
-                        "power being disconnected rather than a brownout")
+            LOG.info("  voltage was steady right up to the cut - reads as a normal "
+                     "power-off, not a fault")
 
     # -- change detection -------------------------------------------------
 
@@ -964,6 +996,9 @@ def print_once(mon: HealthMonitor, as_json: bool) -> None:
     print(f"log writes ok      : {s['log_write_ok']}")
     print(f"starts this boot   : {s['starts_this_boot']}"
           + ("   <-- restart loop?" if s['starts_this_boot'] >= RESTART_LOOP_WARN else ""))
+    print(f"brownout boots     : {s['brownout_boots']}"
+          + ("   <-- previous boot ended in a sag" if s["last_boot_unclean"]
+             and s["brownout_boots"] else ""))
     print(f"boots / unclean    : {s['boot_count']} / {s['unclean_boots']}"
           + ("   <-- last boot was NOT clean" if s["last_boot_unclean"] else ""))
     for k, v in s.items():
