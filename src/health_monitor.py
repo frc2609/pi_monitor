@@ -982,10 +982,15 @@ class HealthMonitor:
             self.last_described = raw
             LOG.info("throttle word is now %s", describe_throttled(raw))
 
+        # last_boot_unclean used to raise the level here, which meant one
+        # unclean boot turned EVERY line of that entire boot into a WARNING -
+        # and on a robot every boot is unclean, so nothing would ever be INFO
+        # again. The severity signal died. It is reported once at startup by
+        # report_previous_boot(), which is where it belongs.
         t = self.thresholds
         if not s["ok"]:
             LOG.error(line)
-        elif (s.get("temp_c") or 0) >= t["temp_warn_c"] or s.get("last_boot_unclean"):
+        elif (s.get("temp_c") or 0) >= t["temp_warn_c"]:
             LOG.warning(line)
         else:
             LOG.info(line)
