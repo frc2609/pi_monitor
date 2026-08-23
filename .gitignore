@@ -26,3 +26,8 @@ Thumbs.db
 # NOTE: config/config.yaml is deliberately NOT ignored. It holds no secrets —
 # only the team number, topic names, and thresholds — and a fresh Pi should
 # get working defaults straight from the clone.
+
+# Untracked for now. DESIGN.md and RUNNING.md describe a setup that has not
+# been walked through on a real Pi yet, so they are kept local until the steps
+# are confirmed. Remove this and `git add docs/` once they are.
+docs/
