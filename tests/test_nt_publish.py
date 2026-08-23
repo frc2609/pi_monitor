@@ -62,7 +62,8 @@ fake = types.ModuleType("ntcore")
 fake.NetworkTableInstance = types.SimpleNamespace(getDefault=lambda: Inst(PUBLISHED))
 sys.modules["ntcore"] = fake
 
-from health_monitor import DEFAULTS, NTPublisher, deep_merge   # noqa: E402
+from health_monitor import (DEFAULTS, NTPublisher, deep_merge,   # noqa: E402
+                            nt_topic)
 
 cfg = deep_merge(DEFAULTS, {"nt": {"mode": "server"}})
 nt = NTPublisher(cfg)
@@ -108,4 +109,26 @@ nt.publish({"some_text": "hello"})
 assert sent("some_text") == [], PUBLISHED
 print("PASS  strings are dropped")
 
+
+# Grouped topic names are what make AdvantageScope show collapsible headings
+# instead of thirty loose entries.
+assert nt_topic("volts_in") == "power/volts_in"
+assert nt_topic("throttled_raw") == "throttle/throttled_raw"
+assert nt_topic("svc_photonvision_active") == "services/photonvision"
+assert nt_topic("ok") == "ok", "ok stays at the top"
+assert nt_topic("heartbeat") == "heartbeat", "heartbeat stays at the top"
+assert nt_topic("something_new") == "something_new", "unknown fields are not lost"
+print("PASS  topics are grouped, ok and heartbeat stay at the top")
+
+# A watched service must appear even before it is installed. It publishes as a
+# number because a boolean cannot express "not installed", and a topic that
+# never receives a value never shows up in the tree at all.
+nt.publish({"svc_photonvision_active": None})
+v = sent("services/photonvision")
+assert v and math.isnan(v[-1]), v
+nt.publish({"svc_photonvision_active": True})
+assert sent("services/photonvision")[-1] == 1.0
+nt.publish({"svc_photonvision_active": False})
+assert sent("services/photonvision")[-1] == 0.0
+print("PASS  a service appears even when not installed (NaN / 1 / 0)")
 print("\nALL PASS")
