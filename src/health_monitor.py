@@ -77,10 +77,9 @@ DEFAULTS: dict[str, Any] = {
     # How far a reading must move from the last value LOGGED before it counts
     # as news. See changed().
     "deltas": {
-        "temp_c": 2.0,
+        "temp_c": 4.0,
         "volts": 0.05,
         "power_w": 0.5,
-        "cpu_mhz": 100.0,
         "mem_mb": 100.0,
         "disk_mb": 100.0,
     },
@@ -127,10 +126,18 @@ DELTA_FIELDS = {
     "temp_c": "temp_c",
     "volts_in": "volts",
     "power_w": "power_w",
-    "cpu_mhz": "cpu_mhz",
     "mem_available_mb": "mem_mb",
     "disk_free_mb": "disk_mb",
 }
+
+# cpu_mhz is deliberately absent. An idle Pi scales between 1500 and 2400MHz
+# constantly, and no tolerance absorbs a 900MHz step - it would log on every
+# idle and every wake. It is still sampled, recorded and published; it just
+# does not trigger a line on its own.
+#
+# Nothing is lost: throttling sets the throttle bits, those are in the discrete
+# signature, and they log immediately. The clock drop is the corroboration you
+# read next to them, not the alarm.
 
 # Starts within one boot before we call it a restart loop. systemd is told
 # never to stop restarting us, so nothing else will notice.
