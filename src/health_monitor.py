@@ -112,6 +112,23 @@ NT_PATH = {field: group + "/" + field
            for group, fields in NT_GROUPS.items() for field in fields}
 
 
+def nt_value(key: str, value: Any) -> Any:
+    """
+    Services publish as numbers rather than booleans.
+
+    A boolean cannot say "not installed" - only true or false - so a service
+    that does not exist yet never got a topic at all, and the whole services/
+    group was missing from the tree instead of showing as unknown.
+
+        1    running
+        0    installed but stopped
+        NaN  not installed (AdvantageScope draws a gap)
+    """
+    if key.startswith("svc_"):
+        return float("nan") if value is None else (1.0 if value else 0.0)
+    return value
+
+
 def nt_topic(key: str) -> str:
     """Where a sample field goes in the NT tree."""
     if key.startswith("svc_"):
@@ -634,6 +651,7 @@ class NTPublisher:
         if not self.enabled or self.table is None:
             return
         for key, value in flat.items():
+            value = nt_value(key, value)
             if isinstance(value, str):
                 continue
             name = nt_topic(key)
