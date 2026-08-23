@@ -35,7 +35,7 @@ import tarfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_CONFIG = HERE / "fetch-logs.conf"
+DEFAULT_CONFIG = HERE / "targets.conf"
 DEFAULT_DEST = Path("fetched-logs")
 
 SSH_BASE = ["ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"]
