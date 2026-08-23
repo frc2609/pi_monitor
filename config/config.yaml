@@ -58,12 +58,16 @@ health:
 
   # How far a reading must move from the last value LOGGED before it counts as
   # a change worth recording. Keeps sensor noise out of the log.
+  #
+  # Set from measured jitter on a real Pi, not from theory. At idle the PMIC
+  # wanders about 0.04V and 0.4W on its own, so anything tighter logs almost
+  # every sample.
   # Raise one if that reading is chattering; lower it if you are missing
   # movement you care about.
   deltas:
     temp_c: 2.0
-    volts: 0.02      # the main signal here, and the alarm sits at 4.75
-    power_w: 0.25
+    volts: 0.05
+    power_w: 0.5
     cpu_mhz: 100.0
     mem_mb: 100.0
     disk_mb: 100.0

@@ -74,8 +74,8 @@ DEFAULTS: dict[str, Any] = {
         # the last value LOGGED before it counts as news. See changed().
         "deltas": {
             "temp_c": 2.0,
-            "volts": 0.02,
-            "power_w": 0.25,
+            "volts": 0.05,
+            "power_w": 0.5,
             "cpu_mhz": 100.0,
             "mem_mb": 100.0,
             "disk_mb": 100.0,
@@ -330,12 +330,27 @@ def read_boot_id() -> str | None:
 
 
 def service_active(name: str) -> bool | None:
+    """
+    True = running, False = installed but not running, None = not installed.
+
+    The three-way answer matters. `is-active` cannot tell a stopped service
+    from one that was never installed, so a unit we simply have not set up yet
+    reported as "down" and failed every single sample. PhotonVision does not
+    exist until someone installs it, and that is not a fault.
+    """
     try:
-        r = subprocess.run(["systemctl", "is-active", "--quiet", name],
-                           capture_output=True, timeout=5)
+        r = subprocess.run(
+            ["systemctl", "show", "-p", "LoadState", "-p", "ActiveState", name],
+            capture_output=True, text=True, timeout=5)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
-    return r.returncode == 0
+    if r.returncode != 0:
+        return None
+    fields = dict(line.split("=", 1)
+                  for line in (r.stdout or "").splitlines() if "=" in line)
+    if fields.get("LoadState") != "loaded":
+        return None          # not-found, masked, or a broken unit file
+    return fields.get("ActiveState") == "active"
 
 
 # ---------------------------------------------------------------------------
