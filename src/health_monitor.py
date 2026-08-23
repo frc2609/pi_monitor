@@ -508,6 +508,7 @@ class BootState:
         self.unclean_boots = 0
         self.brownout_boots = 0
         self.starts_this_boot = 1
+        self.log_file: str | None = None
         self.last_boot_was_unclean = False
         self._load_and_update()
 
@@ -524,6 +525,7 @@ class BootState:
         prev_boot_id = prev.get("boot_id")
         prev_clean = bool(prev.get("clean_shutdown", True))
         prev_starts = int(prev.get("starts_this_boot", 0))
+        prev_log_file = prev.get("log_file")
 
         if prev_boot_id != self.boot_id:
             # Genuinely a new boot, not just a service restart within one boot.
@@ -540,6 +542,8 @@ class BootState:
                          prev_boot_id, self.unclean_boots)
         else:
             self.starts_this_boot = prev_starts + 1
+            # Same boot, so carry on writing wherever this boot already was.
+            self.log_file = prev_log_file
             LOG.info("service restarted within the same boot (start #%d)",
                      self.starts_this_boot)
             if self.starts_this_boot >= RESTART_LOOP_WARN:
@@ -562,6 +566,7 @@ class BootState:
             "unclean_boots": self.unclean_boots,
             "brownout_boots": self.brownout_boots,
             "starts_this_boot": self.starts_this_boot,
+            "log_file": self.log_file,
             "clean_shutdown": clean,
             "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
@@ -589,6 +594,12 @@ class BootState:
 
     def mark_clean(self) -> None:
         self._write(clean=True)
+
+    def set_log_file(self, path: Path) -> None:
+        """Remember which file this boot is writing to, so a restart carries
+        on in the same one rather than guessing from filenames."""
+        self.log_file = str(path)
+        self._write(clean=False)
 
     def record_brownout(self) -> None:
         """The previous boot ended in a sag, not in someone cutting power."""
@@ -776,25 +787,19 @@ class HealthMonitor:
         # Sorting by the date would trust the clock, and the clock is the thing
         # we cannot trust - one boot with a wrong year would sort to the end and
         # be mistaken for the most recent.
-        prefix = f"health_b{self.state.boot_count:05d}"
-        # Only reuse when this is a RESTART inside a boot that already opened a
-        # file. On the first start of a boot, always make a new one.
-        #
-        # Without that test, anything which resets the counter - deleting
-        # boot_state.json, a reimage, a new card - sends boot 1 back to the
-        # boot-1 file from a previous life and mixes two unrelated boots into
-        # one file.
-        if self.state.boot_id is not None and self.state.starts_this_boot > 1:
-            try:
-                existing = sorted(self.log_dir.glob(f"{prefix}_*.jsonl"))
-            except OSError:
-                existing = []
-            if existing:
-                return existing[-1]
-        # The date is only here so a human can see roughly when a boot was.
-        # Nothing depends on it being right.
+        # Which file this boot is using is recorded in boot_state.json, not
+        # inferred from filenames. Globbing for the boot number looked right
+        # until anything reset the counter, at which point boot 1 found boot
+        # 1's file from a previous life and appended to it.
+        if self.state.log_file:
+            existing = Path(self.state.log_file)
+            if existing.exists():
+                return existing
+
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return self.log_dir / f"{prefix}_{stamp}.jsonl"
+        path = self.log_dir / f"health_b{self.state.boot_count:05d}_{stamp}.jsonl"
+        self.state.set_log_file(path)
+        return path
 
     # -- sampling ---------------------------------------------------------
 
