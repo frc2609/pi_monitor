@@ -1002,7 +1002,9 @@ class HealthMonitor:
             (f"=0x{raw:x}" if raw is not None else "=n/a"),
             f"{tag('temp', 'temp_c')}={fmt(s['temp_c'], 'C')}",
             f"{tag('vin', 'volts_in')}={fmt(s['volts_in'], 'V', 2)}",
-            f"{tag('pwr', 'power_w')}={fmt(s['power_w'], 'W')}",
+            # "draw", not "pwr": this is consumption, and pwr read as though
+            # it were the supply's capacity.
+            f"{tag('draw', 'power_w')}={fmt(s['power_w'], 'W')}",
             f"cpu={fmt(s['cpu_mhz'], '', 0)}",
             f"{tag('mem', 'mem_available_mb')}={fmt(s['mem_available_mb'], '', 0)}",
             f"{tag('disk', 'disk_free_mb')}={fmt(s['disk_free_mb'], '', 0)}",
