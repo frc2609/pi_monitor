@@ -10,11 +10,16 @@ out, corrupted files, and random reboots.
 
 ## Docs
 
-- [docs/RUNNING.md](docs/RUNNING.md): how to run it and read its output. Covers the
-  bench, the robot, and AdvantageScope with or without a roboRIO.
-- [docs/DESIGN.md](docs/DESIGN.md): how it works and why it was built this way.
-- [../docs/TROUBLESHOOTING.md](../docs/TROUBLESHOOTING.md): log of problems we've
-  actually hit. Add to it when you solve something.
+Not in this repo yet. `docs/DESIGN.md` and `docs/RUNNING.md` are written but held back
+until the install has been walked through on a real Pi, and the troubleshooting log
+lives one level up in the shared docs because it covers the whole Pi rather than this
+service.
+
+- `docs/RUNNING.md`: how to run it and read its output. Bench, robot, and
+  AdvantageScope with or without a roboRIO.
+- `docs/DESIGN.md`: how it works and why it was built this way.
+- `../docs/TROUBLESHOOTING.md`: log of problems we've actually hit. Add to it when you
+  solve something.
 
 ## Scope
 
@@ -38,7 +43,11 @@ where you can test the decision in simulation.
 
 Raspberry Pi 5 8GB, Raspberry Pi OS 64-bit (trixie), headless over SSH.
 
-Power is 5V/5A (27W), and it matters more than anything else here. If the Pi does not detect 5A it will limit peripherals to 600mA total across all connected. A single camera needs ~500mA, we most likely will be running multiple,
+Power is 5V/5A (27W), and it matters more than anything else here. If the Pi doesn't
+negotiate a 5A supply over USB-PD, the firmware caps all USB peripherals at 600mA
+combined. It raises that to 1.6A once it does. A single camera draws roughly 500mA and
+we expect to run more than one, so an undersized supply doesn't just throttle the CPU,
+it starves the cameras.
 
 ## Layout
 
