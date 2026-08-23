@@ -1138,9 +1138,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--verbose", "-v", action="store_true")
     args = ap.parse_args(argv)
 
+    # systemd sets JOURNAL_STREAM when it is capturing our output. The journal
+    # timestamps every line itself, so ours is a second timestamp on the same
+    # line - and journalctl -o cat still shows it. Drop it under systemd, keep
+    # it when running by hand where nothing else provides one.
+    under_systemd = "JOURNAL_STREAM" in os.environ
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(message)s",
+        format=("%(levelname)-7s %(message)s" if under_systemd
+                else "%(asctime)s %(levelname)-7s %(message)s"),
         # stderr, not stdout: --json writes the sample to stdout and log lines
         # would corrupt it. systemd sends both to the journal either way.
         stream=sys.stderr,
