@@ -686,6 +686,7 @@ class HealthMonitor:
         self.last_flush = time.monotonic()
         self.last_heartbeat_log = 0.0
         self.log_write_ok = True
+        self.last_described: int | None = None
         self.last_discrete: tuple | None = None
         self.last_logged: dict[str, Any] = {}
 
@@ -933,21 +934,33 @@ class HealthMonitor:
 
     def log_sample(self, s: dict[str, Any], reason: str) -> None:
         """Log the inputs to the verdict, never just the verdict."""
+        raw = s["throttled_raw"]
         parts = [
-            f"ok={s['ok']}",
-            f"throttled={describe_throttled(s['throttled_raw']) if s['throttled_raw'] is not None else 'n/a'}",
-            f"temp={fmt(s['temp_c'], '°C')}",
-            f"vin={fmt(s['volts_in'], 'V', 2)}",   # 2dp: the delta is 0.02V
+            "OK" if s["ok"] else "BAD",
+            f"thr=0x{raw:x}" if raw is not None else "thr=n/a",
+            f"temp={fmt(s['temp_c'], 'C')}",
+            f"vin={fmt(s['volts_in'], 'V', 2)}",
             f"pwr={fmt(s['power_w'], 'W')}",
-            f"cpu={fmt(s['cpu_mhz'], 'MHz', 0)}",
-            f"mem={fmt(s['mem_available_mb'], 'MB', 0)}",
-            f"disk={fmt(s['disk_free_mb'], 'MB', 0)}",
+            f"cpu={fmt(s['cpu_mhz'], '', 0)}",
+            f"mem={fmt(s['mem_available_mb'], '', 0)}",
+            f"disk={fmt(s['disk_free_mb'], '', 0)}",
             f"load={fmt(s['load1'], '', 2)}",
-            f"up={fmt(s['uptime_s'], 's', 0)}",
-            f"boots={s['boot_count']}/{s['unclean_boots']}unclean",
+            f"up={fmt(s['uptime_s'], '', 0)}",
+            f"boots={s['boot_count']}/{s['unclean_boots']}",
         ]
-        parts += [f"{k}={v}" for k, v in s.items() if k.startswith("svc_")]
+        # up / DOWN / ? rather than svc_photonvision_active=None
+        for k, v in s.items():
+            if k.startswith("svc_"):
+                name = k[4:].removesuffix("_active")
+                parts.append(f"{name}=" + ("up" if v else "?" if v is None else "DOWN"))
+
         line = f"[{reason}] " + " ".join(parts)
+
+        # The decoded text is 50-odd characters of mostly unchanging history.
+        # Print it when the word changes, not on every line.
+        if raw is not None and raw != self.last_described:
+            self.last_described = raw
+            LOG.info("throttle word is now %s", describe_throttled(raw))
 
         t = self.thresholds
         if not s["ok"]:
