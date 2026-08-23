@@ -777,7 +777,14 @@ class HealthMonitor:
         # we cannot trust - one boot with a wrong year would sort to the end and
         # be mistaken for the most recent.
         prefix = f"health_b{self.state.boot_count:05d}"
-        if self.state.boot_id is not None:
+        # Only reuse when this is a RESTART inside a boot that already opened a
+        # file. On the first start of a boot, always make a new one.
+        #
+        # Without that test, anything which resets the counter - deleting
+        # boot_state.json, a reimage, a new card - sends boot 1 back to the
+        # boot-1 file from a previous life and mixes two unrelated boots into
+        # one file.
+        if self.state.boot_id is not None and self.state.starts_this_boot > 1:
             try:
                 existing = sorted(self.log_dir.glob(f"{prefix}_*.jsonl"))
             except OSError:
