@@ -910,40 +910,60 @@ class HealthMonitor:
         equivalent but isn't, because a reading parked on a bucket boundary
         flips across it on noise alone and logs every sample.
         """
-        discrete = self.discrete_signature(s)
         if self.last_discrete is None:
             return True
-        if discrete != self.last_discrete:
+        if self.discrete_signature(s) != self.last_discrete:
             return True
+        return bool(self.moved(s))
+
+    def moved(self, s: dict[str, Any]) -> set[str]:
+        """
+        Which continuous fields have moved their delta since the last log.
+
+        log_sample() uppercases these, so a glance at a line tells you what
+        actually changed instead of leaving you to diff it against the one
+        above.
+        """
+        out = set()
         for field, delta_key in DELTA_FIELDS.items():
             current = s.get(field)
             previous = self.last_logged.get(field)
             if current is None and previous is None:
                 continue
             if current is None or previous is None:
-                return True      # a reading appeared or vanished; both matter
-            if abs(current - previous) >= float(self.deltas[delta_key]):
-                return True
-        return False
+                out.add(field)   # a reading appeared or vanished; both matter
+            elif abs(current - previous) >= float(self.deltas[delta_key]):
+                out.add(field)
+        return out
 
     def remember(self, s: dict[str, Any]) -> None:
         """Record what we just logged, so the next comparison is against it."""
         self.last_discrete = self.discrete_signature(s)
         for field in DELTA_FIELDS:
             self.last_logged[field] = s.get(field)
+        self.last_logged["throttled_raw"] = s.get("throttled_raw")
 
     def log_sample(self, s: dict[str, Any], reason: str) -> None:
         """Log the inputs to the verdict, never just the verdict."""
         raw = s["throttled_raw"]
+        moved = self.moved(s) if self.last_discrete is not None else set()
+        thr_moved = raw != (self.last_logged.get("throttled_raw", raw))
+
+        def tag(label: str, field: str) -> str:
+            """UPPERCASE the label when that reading moved. Plain text, so it
+            survives grep, the journal and the .jsonl - unlike colour codes."""
+            return label.upper() if field in moved else label
+
         parts = [
             "OK" if s["ok"] else "BAD",
-            f"thr=0x{raw:x}" if raw is not None else "thr=n/a",
-            f"temp={fmt(s['temp_c'], 'C')}",
-            f"vin={fmt(s['volts_in'], 'V', 2)}",
-            f"pwr={fmt(s['power_w'], 'W')}",
+            ("THR" if thr_moved else "thr") +
+            (f"=0x{raw:x}" if raw is not None else "=n/a"),
+            f"{tag('temp', 'temp_c')}={fmt(s['temp_c'], 'C')}",
+            f"{tag('vin', 'volts_in')}={fmt(s['volts_in'], 'V', 2)}",
+            f"{tag('pwr', 'power_w')}={fmt(s['power_w'], 'W')}",
             f"cpu={fmt(s['cpu_mhz'], '', 0)}",
-            f"mem={fmt(s['mem_available_mb'], '', 0)}",
-            f"disk={fmt(s['disk_free_mb'], '', 0)}",
+            f"{tag('mem', 'mem_available_mb')}={fmt(s['mem_available_mb'], '', 0)}",
+            f"{tag('disk', 'disk_free_mb')}={fmt(s['disk_free_mb'], '', 0)}",
             f"load={fmt(s['load1'], '', 2)}",
             f"up={fmt(s['uptime_s'], '', 0)}",
             f"boots={s['boot_count']}/{s['unclean_boots']}",
