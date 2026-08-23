@@ -87,6 +87,41 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+# Where each field lands in the NetworkTables tree. A "/" makes AdvantageScope
+# nest it, so related values collapse under one heading instead of appearing as
+# thirty loose entries.
+#
+# Only the NT layout changes. The sample dict and the .jsonl file stay flat, so
+# jq recipes and the log reader are unaffected.
+NT_GROUPS = {
+    "throttle": ["throttled_raw", "undervoltage_now", "freq_capped_now",
+                 "throttled_now", "soft_temp_now",
+                 "undervoltage_since_boot", "throttled_since_boot",
+                 "undervoltage_since_start", "throttled_since_start"],
+    "power": ["volts_in", "power_w"],
+    "thermal": ["temp_c", "cpu_mhz"],
+    "resources": ["mem_available_mb", "disk_free_mb", "load1"],
+    "boot": ["boot_count", "unclean_boots", "brownout_boots", "last_boot_unclean",
+             "uptime_s", "starts_this_boot", "restarts_by_systemd"],
+    "monitor": ["ts", "log_write_ok", "nt_connected", "nt_offset_us"],
+}
+
+# ok and heartbeat are deliberately left at the top so they are the first two
+# things you see, and the two worth pinning to a graph.
+NT_PATH = {field: group + "/" + field
+           for group, fields in NT_GROUPS.items() for field in fields}
+
+
+def nt_topic(key: str) -> str:
+    """Where a sample field goes in the NT tree."""
+    if key.startswith("svc_"):
+        name = key[len("svc_"):]
+        if name.endswith("_active"):
+            name = name[:-len("_active")]
+        return "services/" + name
+    return NT_PATH.get(key, key)
+
+
 # Sample field -> key in config `deltas`. Used for change detection.
 DELTA_FIELDS = {
     "temp_c": "temp_c",
@@ -554,28 +589,29 @@ class NTPublisher:
         for key, value in flat.items():
             if isinstance(value, str):
                 continue
+            name = nt_topic(key)
             if value is None:
                 # NaN rather than skipping. Skipping leaves the topic holding
                 # its last value, so a sensor that stopped answering reads as a
                 # healthy frozen one. AdvantageScope draws NaN as a gap.
                 # Booleans have no NaN, so a missing boolean keeps its last
                 # state - there is nothing better to send.
-                pub = self.pubs.get(key)
-                if pub is not None and self.numeric.get(key):
-                    self._set(key, pub, float("nan"))
+                pub = self.pubs.get(name)
+                if pub is not None and self.numeric.get(name):
+                    self._set(name, pub, float("nan"))
                 continue
-            pub = self.pubs.get(key)
+            pub = self.pubs.get(name)
             if pub is None:
                 if isinstance(value, bool):     # bool before int: bools are ints
-                    pub = self.table.getBooleanTopic(key).publish()
-                    self.numeric[key] = False
+                    pub = self.table.getBooleanTopic(name).publish()
+                    self.numeric[name] = False
                 elif isinstance(value, (int, float)):
-                    pub = self.table.getDoubleTopic(key).publish()
-                    self.numeric[key] = True
+                    pub = self.table.getDoubleTopic(name).publish()
+                    self.numeric[name] = True
                 else:
                     continue
-                self.pubs[key] = pub
-            self._set(key, pub, value if isinstance(value, bool) else float(value))
+                self.pubs[name] = pub
+            self._set(name, pub, value if isinstance(value, bool) else float(value))
 
     def _set(self, key: str, pub: Any, value: Any) -> None:
         try:

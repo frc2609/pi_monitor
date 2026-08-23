@@ -76,31 +76,31 @@ def sent(key):
 # A reading that has never had a value creates no topic - we cannot know
 # whether it is a double or a boolean.
 nt.publish({"volts_in": None})
-assert sent("volts_in") == [], PUBLISHED
+assert sent("power/volts_in") == [], PUBLISHED
 print("PASS  a never-seen reading publishes nothing")
 
 # Once it has a value, it publishes normally.
 nt.publish({"volts_in": 5.05})
-assert sent("volts_in") == [5.05], PUBLISHED
+assert sent("power/volts_in") == [5.05], PUBLISHED
 print("PASS  a real value publishes")
 
 # When it goes missing, the topic gets NaN rather than being left stale.
 nt.publish({"volts_in": None})
-last = sent("volts_in")[-1]
+last = sent("power/volts_in")[-1]
 assert isinstance(last, float) and math.isnan(last), PUBLISHED
 print("PASS  a reading that goes missing publishes NaN, not a stale value")
 
 # Booleans have no NaN. A missing one keeps its last state, which is the least
 # bad option - worth knowing when reading a trace.
 nt.publish({"throttled_now": True})
-before = len(sent("throttled_now"))
+before = len(sent("throttle/throttled_now"))
 nt.publish({"throttled_now": None})
-assert len(sent("throttled_now")) == before, PUBLISHED
+assert len(sent("throttle/throttled_now")) == before, PUBLISHED
 print("PASS  a missing boolean is left alone (no NaN exists for it)")
 
 # Booleans must not be mistaken for numbers - bool is a subclass of int.
-assert nt.numeric["throttled_now"] is False
-assert nt.numeric["volts_in"] is True
+assert nt.numeric["throttle/throttled_now"] is False
+assert nt.numeric["power/volts_in"] is True
 print("PASS  booleans publish as booleans, not doubles")
 
 # Strings never reach NetworkTables.
