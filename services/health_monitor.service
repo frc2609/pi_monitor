@@ -33,6 +33,9 @@ SupplementaryGroups=video
 
 WorkingDirectory=/home/pi/vision/monitor
 Environment=PYTHONUNBUFFERED=1
+# systemd does not expose the unit name to the process, and we need it
+# to ask how many times we have been restarted.
+Environment=UNIT_NAME=health_monitor.service
 
 # The venv interpreter, NOT /usr/bin/python3. systemd never activates a venv,
 # so pointing at the system python here fails with ModuleNotFoundError even

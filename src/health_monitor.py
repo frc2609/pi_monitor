@@ -264,6 +264,35 @@ def read_disk_free_mb(path: str = "/") -> float | None:
         return None
 
 
+def systemd_restarts() -> int | None:
+    """
+    How many times systemd has restarted us automatically. None when we are not
+    running under systemd, which includes every laptop run.
+
+    This is the honest restart-loop signal. starts_this_boot counts every start
+    including your own deploys, so it climbs during setup; NRestarts counts only
+    the ones systemd had to perform, and resets when a human starts or stops the
+    unit deliberately.
+
+    systemd does not put the unit name in the environment, so the unit file
+    passes it in as UNIT_NAME.
+    """
+    unit = os.environ.get("UNIT_NAME")
+    if not unit:
+        return None
+    try:
+        r = subprocess.run(["systemctl", "show", "-p", "NRestarts", "--value", unit],
+                           capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        return int((r.stdout or "").strip())
+    except ValueError:
+        return None
+
+
 def read_load1() -> float | None:
     """
     1-minute load average. Absent on Windows, where os.getloadavg() does not
@@ -411,12 +440,13 @@ class BootState:
             LOG.info("service restarted within the same boot (start #%d)",
                      self.starts_this_boot)
             if self.starts_this_boot >= RESTART_LOOP_WARN:
-                LOG.warning(
-                    "started %d times without a reboot - something keeps killing "
-                    "this service. systemd will not give up on its own "
-                    "(StartLimitIntervalSec=0), so nothing else will flag it. "
-                    "Check: journalctl -u health_monitor -b",
-                    self.starts_this_boot)
+                # Deliberately mild: this counts deploys too, so it climbs
+                # during setup. restarts_by_systemd is the one that means
+                # something died.
+                LOG.info("started %d times without a reboot. If those were your "
+                         "own restarts this is fine; watch restarts_by_systemd "
+                         "for the ones systemd had to do.",
+                         self.starts_this_boot)
 
         self._write(clean=False)
 
@@ -619,6 +649,8 @@ class HealthMonitor:
         self.baseline_throttled: int | None = None
         self.sticky_since_start = 0
         self.service_cache: dict[str, bool | None] = {}
+        self.restart_cache: int | None = None
+        self.restarts_warned = -1
         self.sample_count = 0
         self.heartbeat = 0
         self.running = True
@@ -682,6 +714,7 @@ class HealthMonitor:
         if self.sample_count % int(self.h["service_check_every_n"]) == 1 or not self.service_cache:
             for name in self.h["watch_services"]:
                 self.service_cache[name] = service_active(name)
+            self.restart_cache = systemd_restarts()
 
         s: dict[str, Any] = {
             "ts": time.time(),
@@ -711,6 +744,9 @@ class HealthMonitor:
             # that means something.
             "brownout_boots": self.state.brownout_boots,
             "starts_this_boot": self.state.starts_this_boot,
+            # starts_this_boot includes your deploys. This one is only what
+            # systemd had to restart, which is the actual loop signal.
+            "restarts_by_systemd": self.restart_cache,
             "last_boot_unclean": self.state.last_boot_was_unclean,
             # False means the card is refusing writes. Only the journal would
             # have it otherwise, and nobody reads the journal mid-match.
@@ -719,6 +755,14 @@ class HealthMonitor:
         s.update(self.nt.status())
         for name, active in self.service_cache.items():
             s[f"svc_{name.replace('-', '_')}_active"] = active
+
+        n = s.get("restarts_by_systemd")
+        if (n is not None and n >= RESTART_LOOP_WARN and n > self.restarts_warned):
+            self.restarts_warned = n
+            LOG.warning("systemd has restarted this service %d times - it keeps "
+                        "dying on its own. StartLimitIntervalSec=0 means systemd "
+                        "will never stop trying, so nothing else will flag this. "
+                        "Check: journalctl -u health_monitor -b", n)
 
         s["ok"] = self.verdict(s)
         return s
@@ -807,7 +851,7 @@ class HealthMonitor:
             (k, v) for k, v in s.items()
             if isinstance(v, bool) and k not in ("last_boot_unclean",)
         ))
-        return (booleans, s.get("throttled_raw"))
+        return (booleans, s.get("throttled_raw"), s.get("restarts_by_systemd"))
 
     def changed(self, s: dict[str, Any]) -> bool:
         """
@@ -1009,6 +1053,9 @@ def print_once(mon: HealthMonitor, as_json: bool) -> None:
     print(f"uptime             : {fmt(s['uptime_s'], ' s', 0)}")
     print(f"nt connected       : {s['nt_connected']}  offset_us={s['nt_offset_us']}")
     print(f"log writes ok      : {s['log_write_ok']}")
+    print(f"systemd restarts   : {s['restarts_by_systemd']}"
+          + ("   <-- restart loop" if (s['restarts_by_systemd'] or 0) >= RESTART_LOOP_WARN
+             else ""))
     print(f"starts this boot   : {s['starts_this_boot']}"
           + ("   <-- restart loop?" if s['starts_this_boot'] >= RESTART_LOOP_WARN else ""))
     print(f"brownout boots     : {s['brownout_boots']}"
