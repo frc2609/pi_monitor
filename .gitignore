@@ -14,6 +14,7 @@ vision-env/
 
 # Logs and local scratch
 *.log
+fetched-logs/          # pulled off the Pi by scripts/fetch-logs.sh
 captures/
 scratch/
 
