@@ -64,7 +64,7 @@ sys.modules["ntcore"] = fake
 
 from health_monitor import DEFAULTS, NTPublisher, deep_merge   # noqa: E402
 
-cfg = deep_merge(DEFAULTS, {"nt_mode": "server"})
+cfg = deep_merge(DEFAULTS, {"nt": {"mode": "server"}})
 nt = NTPublisher(cfg)
 assert nt.enabled, "stub ntcore should have been accepted"
 

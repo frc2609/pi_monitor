@@ -6,21 +6,28 @@
 # The only place the team number appears in this project.
 team: 2609
 
-# server = this Pi hosts NetworkTables (bench, no roboRIO present)
-# client = this Pi connects to the roboRIO (on the robot)
-nt_mode: server
+# Seconds between samples. Each sample runs four vcgencmd commands, so time
+# those before going below about 0.2s.
+interval_s: 1.0
 
-# Explicit NT host or IP, overriding the team lookup. Leave null on the robot.
-nt_server: null
+log_level: INFO      # DEBUG / INFO / WARNING / ERROR. --verbose overrides this.
 
-health:
-  # Seconds between samples. Each sample runs four vcgencmd commands, so time
-  # those before going below about 0.2s.
-  interval_s: 1.0
 
-  nt_enabled: true
-  nt_table: Vision/health
+# --- NetworkTables -------------------------------------------------------
+nt:
+  # server = this Pi hosts NetworkTables (bench, no roboRIO present)
+  # client = this Pi connects to the roboRIO (on the robot)
+  mode: server
 
+  # Explicit host or IP, overriding the team lookup. Leave null on the robot.
+  server: null
+
+  enabled: true
+  table: Vision/health
+
+
+# --- Where records are kept ----------------------------------------------
+storage:
   # systemd creates these. If you change them, change the unit file to match.
   state_dir: /var/lib/health_monitor
   log_dir: /var/log/health_monitor     # null = journal only, no file on disk
@@ -32,42 +39,45 @@ health:
   # A "still alive" record even when nothing changes. This only affects the
   # log and the file - the NetworkTables heartbeat counter updates every
   # sample, so live dead-process detection is already 1s.
-  # 10s bounds how stale the file can be when the Pi dies mid-match.
   heartbeat_log_s: 10.0
 
   # Safety cap on the RAM buffer. Only fills if the disk stops accepting writes.
   buffer_max_records: 2000
 
-  log_level: INFO      # DEBUG / INFO / WARNING / ERROR. --verbose overrides this.
 
+# --- Other services to keep an eye on ------------------------------------
+services:
   # Watched, not managed - we only report whether they are running.
-  watch_services:
+  # A service that is not installed reports as unknown, not as a fault.
+  watch:
     - photonvision
 
   # systemctl is slow, so check every Nth sample. At interval_s 1.0 that is 5s.
-  service_check_every_n: 5
+  check_every_n: 5
 
-  # Crossing any of these marks the sample bad: logs at ERROR, flushes at once.
-  thresholds:
-    temp_warn_c: 70.0            # warning only
-    temp_crit_c: 80.0            # Pi 5 starts throttling itself around here
-    volts_min: 4.75              # 5V rail below this means a supply problem
-    volts_prealarm: 4.90         # not a fault yet, but flush to disk now
-    mem_available_min_mb: 200.0
-    disk_free_min_mb: 500.0
 
-  # How far a reading must move from the last value LOGGED before it counts as
-  # a change worth recording. Keeps sensor noise out of the log.
-  #
-  # Set from measured jitter on a real Pi, not from theory. At idle the PMIC
-  # wanders about 0.04V and 0.4W on its own, so anything tighter logs almost
-  # every sample.
-  # Raise one if that reading is chattering; lower it if you are missing
-  # movement you care about.
-  deltas:
-    temp_c: 2.0
-    volts: 0.05
-    power_w: 0.5
-    cpu_mhz: 100.0
-    mem_mb: 100.0
-    disk_mb: 100.0
+# --- When to call a sample bad -------------------------------------------
+# Crossing any of these logs at ERROR and flushes to disk at once.
+thresholds:
+  temp_warn_c: 70.0            # warning only
+  temp_crit_c: 80.0            # Pi 5 starts throttling itself around here
+  volts_min: 4.75              # 5V rail below this means a supply problem
+  volts_prealarm: 4.90         # not a fault yet, but flush to disk now
+  mem_available_min_mb: 200.0
+  disk_free_min_mb: 500.0
+
+
+# --- How much a reading must move to count as a change -------------------
+# Measured from the last value LOGGED, which keeps sensor noise out of the log.
+#
+# Set from real jitter on a Pi, not from theory. At idle the PMIC wanders about
+# 0.04V and 0.4W on its own, so anything tighter logs almost every sample.
+# Raise one if that reading is chattering; lower it if you are missing movement
+# you care about.
+deltas:
+  temp_c: 2.0
+  volts: 0.05
+  power_w: 0.5
+  cpu_mhz: 100.0
+  mem_mb: 100.0
+  disk_mb: 100.0

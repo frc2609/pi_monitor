@@ -45,11 +45,10 @@ def monitor_with_log(tmp, volts):
                 "ts": now - (len(volts) - i), "volts_in": v,
                 "temp_c": 55.0, "load1": 0.4, "ok": v >= 4.75,
             }) + "\n")
-    cfg = deep_merge(DEFAULTS, {"health": {
-        "nt_enabled": False,
-        "log_dir": str(logs),
-        "state_dir": str(Path(tmp) / "state"),
-    }})
+    cfg = deep_merge(DEFAULTS, {
+        "nt": {"enabled": False},
+        "storage": {"log_dir": str(logs), "state_dir": str(Path(tmp) / "state")},
+    })
     return HealthMonitor(cfg, nt_enabled=False, read_only=True), logs
 
 
@@ -91,9 +90,8 @@ with tempfile.TemporaryDirectory() as tmp:
 
 # Unclean boot, but the log did not survive.
 with tempfile.TemporaryDirectory() as tmp:
-    cfg = deep_merge(DEFAULTS, {"health": {
-        "nt_enabled": False, "log_dir": str(Path(tmp) / "gone"),
-        "state_dir": str(Path(tmp) / "state")}})
+    cfg = deep_merge(DEFAULTS, {"nt": {"enabled": False},
+        "storage": {"log_dir": str(Path(tmp) / "gone"), "state_dir": str(Path(tmp) / "state")}})
     out = report(HealthMonitor(cfg, nt_enabled=False, read_only=True))
     assert "no log records survived" in out, out
     print("PASS  missing log is reported, not crashed on")
@@ -105,23 +103,22 @@ with tempfile.TemporaryDirectory() as tmp:
     print("PASS  clean boot stays quiet")
 
 # Pre-alarm: flush while the voltage is still falling, before it fails.
-cfg = deep_merge(DEFAULTS, {"health": {"nt_enabled": False, "log_dir": None}})
+cfg = deep_merge(DEFAULTS, {"nt": {"enabled": False}, "storage": {"log_dir": None}})
 mon = HealthMonitor(cfg, nt_enabled=False, read_only=True)
-limit = cfg["health"]["thresholds"]["volts_prealarm"]
+limit = cfg["thresholds"]["volts_prealarm"]
 assert not mon.prealarm({"volts_in": limit + 0.10})
 assert mon.prealarm({"volts_in": limit})
 assert mon.prealarm({"volts_in": limit - 0.10})
 assert not mon.prealarm({"volts_in": None})   # no reading is not an alarm
 print("PASS  pre-alarm trips at %.2fV, before the %.2fV fault threshold"
-      % (limit, cfg["health"]["thresholds"]["volts_min"]))
+      % (limit, cfg["thresholds"]["volts_min"]))
 
 # One log file per BOOT. Restarts inside a boot append to it, so a crash loop
 # leaves one readable file rather than a directory full of fragments.
 with tempfile.TemporaryDirectory() as tmp:
     logs = Path(tmp) / "logs"
-    cfg2 = deep_merge(DEFAULTS, {"health": {
-        "nt_enabled": False, "log_dir": str(logs),
-        "state_dir": str(Path(tmp) / "state")}})
+    cfg2 = deep_merge(DEFAULTS, {"nt": {"enabled": False},
+        "storage": {"log_dir": str(logs), "state_dir": str(Path(tmp) / "state")}})
 
     real_boot_id = hm.read_boot_id
     try:

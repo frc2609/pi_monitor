@@ -46,42 +46,46 @@ LOG = logging.getLogger("health_monitor")
 # ---------------------------------------------------------------------------
 
 DEFAULTS: dict[str, Any] = {
-    "team": None,                     # set in config.yaml; only used by NT client mode
-    "nt_mode": "server",              # "server" on the bench, "client" on the robot
-    "nt_server": None,                # explicit host/IP; overrides team lookup
-    "health": {
-        "interval_s": 1.0,
-        "nt_enabled": True,
-        "nt_table": "Vision/health",
+    "team": 2609,
+    "interval_s": 1.0,
+    "log_level": "INFO",
+    "nt": {
+        "mode": "server",             # "server" on the bench, "client" on the robot
+        "server": None,               # explicit host/IP; overrides the team lookup
+        "enabled": True,
+        "table": "Vision/health",
+    },
+    "storage": {
         "state_dir": "/var/lib/health_monitor",
         "log_dir": None,              # None => no disk logging, journald only
-        # Both sized against match length (<3 min), not against card wear.
         "flush_interval_s": 10.0,
-        "heartbeat_log_s": 10.0,      # periodic "still fine" line even with no change
+        "heartbeat_log_s": 10.0,
         "buffer_max_records": 2000,
-        "log_level": "INFO",        # DEBUG/INFO/WARNING/ERROR; --verbose overrides
-        "watch_services": ["photonvision"],
-        "service_check_every_n": 5,   # systemctl is slow-ish; don't do it every sample
-        "thresholds": {
-            "temp_warn_c": 70.0,
-            "temp_crit_c": 80.0,
-            "volts_min": 4.75,
-            "volts_prealarm": 4.90,
-            "mem_available_min_mb": 200.0,
-            "disk_free_min_mb": 500.0,
-        },
-        # Hysteresis for change detection: how far a reading must move from
-        # the last value LOGGED before it counts as news. See changed().
-        "deltas": {
-            "temp_c": 2.0,
-            "volts": 0.05,
-            "power_w": 0.5,
-            "cpu_mhz": 100.0,
-            "mem_mb": 100.0,
-            "disk_mb": 100.0,
-        },
+    },
+    "services": {
+        "watch": ["photonvision"],
+        "check_every_n": 5,           # systemctl is slow-ish; not every sample
+    },
+    "thresholds": {
+        "temp_warn_c": 70.0,
+        "temp_crit_c": 80.0,
+        "volts_min": 4.75,
+        "volts_prealarm": 4.90,
+        "mem_available_min_mb": 200.0,
+        "disk_free_min_mb": 500.0,
+    },
+    # How far a reading must move from the last value LOGGED before it counts
+    # as news. See changed().
+    "deltas": {
+        "temp_c": 2.0,
+        "volts": 0.05,
+        "power_w": 0.5,
+        "cpu_mhz": 100.0,
+        "mem_mb": 100.0,
+        "disk_mb": 100.0,
     },
 }
+
 
 # Sample field -> key in config `deltas`. Used for change detection.
 DELTA_FIELDS = {
@@ -504,8 +508,8 @@ class NTPublisher:
     """
 
     def __init__(self, cfg: dict):
-        h = cfg["health"]
-        self.enabled = bool(h["nt_enabled"])
+        nt = cfg["nt"]
+        self.enabled = bool(nt["enabled"])
         self.pubs: dict[str, Any] = {}
         self.numeric: dict[str, bool] = {}   # key -> is it a double topic
         self.table = None
@@ -522,12 +526,12 @@ class NTPublisher:
 
         self.ntcore = ntcore
         self.inst = ntcore.NetworkTableInstance.getDefault()
-        mode = str(cfg.get("nt_mode", "server")).lower()
+        mode = str(nt.get("mode", "server")).lower()
         if mode == "client":
             self.inst.startClient4("health_monitor")
-            if cfg.get("nt_server"):
-                self.inst.setServer(str(cfg["nt_server"]))
-                LOG.info("NT client → %s", cfg["nt_server"])
+            if nt.get("server"):
+                self.inst.setServer(str(nt["server"]))
+                LOG.info("NT client → %s", nt["server"])
             else:
                 team = cfg.get("team")
                 if team:
@@ -542,7 +546,7 @@ class NTPublisher:
         else:
             self.inst.startServer()
             LOG.info("NT server started (bench mode)")
-        self.table = self.inst.getTable(h["nt_table"])
+        self.table = self.inst.getTable(nt["table"])
 
     def publish(self, flat: dict[str, Any]) -> None:
         if not self.enabled or self.table is None:
@@ -623,19 +627,18 @@ class NTPublisher:
 class HealthMonitor:
     def __init__(self, cfg: dict, nt_enabled: bool = True, read_only: bool = False):
         self.cfg = cfg
-        self.h = cfg["health"]
-        self.thresholds = self.h["thresholds"]
-        self.deltas = self.h["deltas"]
+        self.storage = cfg["storage"]
+        self.services = cfg["services"]
+        self.thresholds = cfg["thresholds"]
+        self.deltas = cfg["deltas"]
 
-        self.state = BootState(self.h["state_dir"], read_only=read_only)
+        self.state = BootState(self.storage["state_dir"], read_only=read_only)
         if not nt_enabled:
-            self.h = dict(self.h)
-            self.h["nt_enabled"] = False
-            cfg = deep_merge(cfg, {"health": {"nt_enabled": False}})
+            cfg = deep_merge(cfg, {"nt": {"enabled": False}})
         self.nt = NTPublisher(cfg)
 
-        self.buffer: deque[dict] = deque(maxlen=int(self.h["buffer_max_records"]))
-        self.log_dir = Path(self.h["log_dir"]) if self.h.get("log_dir") else None
+        self.buffer: deque[dict] = deque(maxlen=int(self.storage["buffer_max_records"]))
+        self.log_dir = Path(self.storage["log_dir"]) if self.storage.get("log_dir") else None
         self.log_path = self.log_file_for_this_boot()
         self.last_flush = time.monotonic()
         self.last_heartbeat_log = 0.0
@@ -711,8 +714,8 @@ class HealthMonitor:
         mem_mb = read_mem_available_mb()
         disk_mb = read_disk_free_mb()
 
-        if self.sample_count % int(self.h["service_check_every_n"]) == 1 or not self.service_cache:
-            for name in self.h["watch_services"]:
+        if self.sample_count % int(self.services["check_every_n"]) == 1 or not self.service_cache:
+            for name in self.services["watch"]:
                 self.service_cache[name] = service_active(name)
             self.restart_cache = systemd_restarts()
 
@@ -922,7 +925,7 @@ class HealthMonitor:
         if self.log_dir is None or not self.buffer:
             return
         now = time.monotonic()
-        if not force and (now - self.last_flush) < float(self.h["flush_interval_s"]):
+        if not force and (now - self.last_flush) < float(self.storage["flush_interval_s"]):
             return
         self.last_flush = now    # set before the attempt, so a failing card
                                  # backs off to the interval instead of being
@@ -964,10 +967,10 @@ class HealthMonitor:
         signal.signal(signal.SIGTERM, self.stop)
         signal.signal(signal.SIGINT, self.stop)
 
-        interval = float(self.h["interval_s"])
-        heartbeat_log_s = float(self.h["heartbeat_log_s"])
+        interval = float(self.cfg["interval_s"])
+        heartbeat_log_s = float(self.storage["heartbeat_log_s"])
         LOG.info("health_monitor starting: interval=%.2fs table=%s state=%s",
-                 interval, self.h["nt_table"], self.h["state_dir"])
+                 interval, self.cfg["nt"]["table"], self.storage["state_dir"])
         LOG.info("writing records to %s", self.log_path or "(disk logging disabled)")
         self.report_previous_boot()
 
@@ -1089,12 +1092,12 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = load_config(args.config)
     if not args.verbose:
-        level = str(cfg["health"].get("log_level", "INFO")).upper()
+        level = str(cfg.get("log_level", "INFO")).upper()
         logging.getLogger().setLevel(getattr(logging, level, logging.INFO))
     if args.interval:
-        cfg = deep_merge(cfg, {"health": {"interval_s": args.interval}})
+        cfg = deep_merge(cfg, {"interval_s": args.interval})
     if args.once:
-        cfg = deep_merge(cfg, {"health": {"nt_enabled": False, "log_dir": None}})
+        cfg = deep_merge(cfg, {"nt": {"enabled": False}, "storage": {"log_dir": None}})
 
     mon = HealthMonitor(cfg, nt_enabled=not (args.no_nt or args.once),
                         read_only=args.once)

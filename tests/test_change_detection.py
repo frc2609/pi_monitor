@@ -13,7 +13,7 @@ sys.path.insert(0, "src")
 
 from health_monitor import DEFAULTS, HealthMonitor, deep_merge
 
-cfg = deep_merge(DEFAULTS, {"health": {"nt_enabled": False, "log_dir": None}})
+cfg = deep_merge(DEFAULTS, {"nt": {"enabled": False}, "storage": {"log_dir": None}})
 mon = HealthMonitor(cfg, nt_enabled=False, read_only=True)
 
 BASE = {
@@ -48,7 +48,7 @@ def run(label, values, field="volts_in"):
     return logged
 
 
-delta = cfg["health"]["deltas"]["volts"]
+delta = cfg["deltas"]["volts"]
 print(f"volts delta = {delta}")
 print()
 
