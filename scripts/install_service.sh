@@ -105,10 +105,15 @@ sudo systemctl daemon-reload
 #   enable --now both
 # Started-but-never-enabled works all through testing, then silently doesn't
 # come back after the first power cycle - usually at a competition.
-say "Enabling and starting (enable --now = start now AND start at boot)"
-sudo systemctl enable --now "${UNIT_NAME}"
+# enable (not --now) then restart. enable --now would start it, and the restart
+# below would then immediately stop and start it again - two starts for one
+# install, which inflates starts_this_boot and looks like a restart loop.
+# restart starts a stopped service anyway, so one call does both jobs and
+# re-running this script still picks up a changed unit file.
+say "Enabling at boot"
+sudo systemctl enable "${UNIT_NAME}"
 
-# restart, so re-running this picks up a changed unit file.
+say "Starting"
 sudo systemctl restart "${UNIT_NAME}"
 
 # "enabled" is the bit people miss - started-but-not-enabled looks fine until
