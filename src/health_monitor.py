@@ -919,7 +919,16 @@ class HealthMonitor:
         undervolted = any(r.get("undervoltage_since_start")
                           or r.get("undervoltage_now")
                           or r.get("throttled_since_start") for r in records)
-        sagging = len(volts) >= 2 and volts[-1] < volts[0]
+        # "Falling" needs a threshold. volts[-1] < volts[0] was true for a
+        # tenth of a millivolt of noise, so a perfectly clean power-off had
+        # about even odds of being called a brownout. The readings print to two
+        # decimals, so 5.168 -> 5.161 looked flat and still tripped it.
+        #
+        # A real sag either drops further than the noise band, or ends below
+        # the pre-alarm line.
+        drop = (volts[0] - volts[-1]) if len(volts) >= 2 else 0.0
+        sagging = (drop >= float(self.deltas["volts"])
+                   or (volts and volts[-1] <= float(self.thresholds["volts_prealarm"])))
 
         if undervolted or sagging:
             self.state.record_brownout()

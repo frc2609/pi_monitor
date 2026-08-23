@@ -88,6 +88,22 @@ with tempfile.TemporaryDirectory() as tmp:
     assert mon.state.brownout_boots == 0, mon.state.brownout_boots
     print("PASS  steady voltage reads as a normal power-off, not counted")
 
+# Real readings from a clean power-off: 5.168 down to 5.161, which prints as a
+# flat 5.16 but is technically decreasing. "volts[-1] < volts[0]" called that a
+# brownout, so half of all normal power-offs were mislabelled by coin flip.
+with tempfile.TemporaryDirectory() as tmp:
+    mon, _ = monitor_with_log(tmp, [5.168, 5.172, 5.166, 5.163, 5.161])
+    out = report(mon)
+    assert "BROWNOUT" not in out, out
+    assert mon.state.brownout_boots == 0
+    print("PASS  sub-millivolt noise is not a brownout")
+
+# A fast sag where only the final sample is low must still be caught.
+with tempfile.TemporaryDirectory() as tmp:
+    mon, _ = monitor_with_log(tmp, [5.16, 5.17, 5.16, 5.16, 4.85])
+    assert "BROWNOUT" in report(mon)
+    print("PASS  a sag caught only in the last sample still counts")
+
 # Unclean boot, but the log did not survive.
 with tempfile.TemporaryDirectory() as tmp:
     cfg = deep_merge(DEFAULTS, {"nt": {"enabled": False},
