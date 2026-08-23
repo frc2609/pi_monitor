@@ -97,7 +97,8 @@ NT_GROUPS = {
                  "throttled_now", "soft_temp_now",
                  "undervoltage_since_boot", "throttled_since_boot",
                  "undervoltage_since_start", "throttled_since_start"],
-    "power": ["volts_in", "power_w"],
+    "power": ["volts_in", "power_w", "supply_max_current_ma",
+              "usb_high_current", "usb_over_current"],
     "thermal": ["temp_c", "cpu_mhz"],
     "resources": ["mem_available_mb", "disk_free_mb", "load1"],
     "boot": ["boot_count", "unclean_boots", "brownout_boots", "last_boot_unclean",
@@ -337,6 +338,45 @@ def systemd_restarts() -> int | None:
         return int((r.stdout or "").strip())
     except ValueError:
         return None
+
+
+DT_POWER = Path("/proc/device-tree/chosen/power")
+
+
+def read_dt_int(name: str) -> int | None:
+    """
+    Read one property from the firmware's power node. They are big-endian
+    4-byte integers, not text - `cat` shows nothing useful.
+
+    Absent on anything that is not a Pi, which is how this stays laptop-safe.
+    """
+    try:
+        raw = (DT_POWER / name).read_bytes()
+    except OSError:
+        return None
+    if not raw:
+        return 1              # a property with no value means "present"
+    return int.from_bytes(raw[:4], "big")
+
+
+def read_supply() -> dict[str, Any]:
+    """
+    What the firmware negotiated over USB-PD, and whether USB has faulted.
+
+    This is the question a label cannot answer. A "27W" charger usually means
+    27W at 9V or 12V; the Pi only draws 5V, and standard USB-PD stops at
+    5V/3A. 5000 here means the supply really does offer the 5V/5A profile the
+    Pi 5 wants. Below that the board still runs, but USB peripherals are capped
+    at 600mA total instead of 1.6A - which is what decides whether a second
+    camera works.
+    """
+    return {
+        "supply_max_current_ma": read_dt_int("max_current"),
+        "usb_high_current": bool(read_dt_int("usb_max_current_enable") or 0)
+        if read_dt_int("usb_max_current_enable") is not None else None,
+        "usb_over_current": bool(read_dt_int("usb_over_current_detected") or 0)
+        if read_dt_int("usb_over_current_detected") is not None else None,
+    }
 
 
 def read_load1() -> float | None:
@@ -799,6 +839,7 @@ class HealthMonitor:
             # have it otherwise, and nobody reads the journal mid-match.
             "log_write_ok": self.log_write_ok,
         }
+        s.update(read_supply())
         s.update(self.nt.status())
         for name, active in self.service_cache.items():
             s[f"svc_{name.replace('-', '_')}_active"] = active
@@ -825,6 +866,7 @@ class HealthMonitor:
             s.get("volts_in") is None or s["volts_in"] >= t["volts_min"],
             s.get("mem_available_mb") is None or s["mem_available_mb"] >= t["mem_available_min_mb"],
             s.get("disk_free_mb") is None or s["disk_free_mb"] >= t["disk_free_min_mb"],
+            not s.get("usb_over_current"),
         ]
         checks += [v is not False for k, v in s.items() if k.startswith("svc_")]
         return all(checks)
@@ -1053,6 +1095,19 @@ class HealthMonitor:
         LOG.info("health_monitor starting: interval=%.2fs table=%s state=%s",
                  interval, self.cfg["nt"]["table"], self.storage["state_dir"])
         LOG.info("writing records to %s", self.log_path or "(disk logging disabled)")
+        supply = read_supply()
+        ma = supply["supply_max_current_ma"]
+        if ma is None:
+            pass                          # not a Pi
+        elif ma >= 5000:
+            LOG.info("supply negotiated %dmA - full 5A profile, USB peripherals "
+                     "get 1.6A", ma)
+        else:
+            LOG.warning("supply negotiated only %dmA. The board will run, but USB "
+                        "peripherals are capped at 600mA TOTAL instead of 1.6A. "
+                        "A 27W charger is usually 27W at 9V or 12V; the Pi needs "
+                        "5V at 5A specifically.", ma)
+
         self.report_previous_boot()
 
         # systemd holds the service in "activating" until this arrives, then
@@ -1131,6 +1186,11 @@ def print_once(mon: HealthMonitor, as_json: bool) -> None:
     print(f"arm clock          : {fmt(s['cpu_mhz'], ' MHz', 0)}")
     print(f"input voltage      : {fmt(s['volts_in'], ' V', 2)}")
     print(f"estimated draw     : {fmt(s['power_w'], ' W', 2)}")
+    ma = s["supply_max_current_ma"]
+    print(f"supply negotiated  : {'n/a' if ma is None else str(ma) + ' mA'}"
+          + ("" if ma is None or ma >= 5000 else "   <-- under 5000, USB capped at 600mA"))
+    print(f"usb high current   : {s['usb_high_current']}")
+    print(f"usb over current   : {s['usb_over_current']}")
     print(f"memory available   : {fmt(s['mem_available_mb'], ' MB', 0)}")
     print(f"disk free          : {fmt(s['disk_free_mb'], ' MB', 0)}")
     print(f"load (1m)          : {fmt(s['load1'], '', 2)}")
