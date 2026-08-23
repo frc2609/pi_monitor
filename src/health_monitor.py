@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-LOG = logging.getLogger("health-monitor")
+LOG = logging.getLogger("health_monitor")
 
 # ---------------------------------------------------------------------------
 # Defaults. Everything here is overridable from config.yaml under `health:`.
@@ -53,7 +53,7 @@ DEFAULTS: dict[str, Any] = {
         "interval_s": 1.0,
         "nt_enabled": True,
         "nt_table": "Vision/health",
-        "state_dir": "/var/lib/health-monitor",
+        "state_dir": "/var/lib/health_monitor",
         "log_dir": None,              # None => no disk logging, journald only
         # Both sized against match length (<3 min), not against card wear.
         "flush_interval_s": 10.0,
@@ -304,7 +304,7 @@ def read_last_records(log_dir: Path, count: int = 5,
     the Pi was doing just before the power went.
     """
     try:
-        files = [p for p in sorted(log_dir.glob("health-*.jsonl")) if p != exclude]
+        files = [p for p in sorted(log_dir.glob("health_*.jsonl")) if p != exclude]
         if not files:
             return []
         with files[-1].open("rb") as f:          # tail, not the whole file
@@ -400,7 +400,7 @@ class BootState:
                     "started %d times without a reboot - something keeps killing "
                     "this service. systemd will not give up on its own "
                     "(StartLimitIntervalSec=0), so nothing else will flag it. "
-                    "Check: journalctl -u health-monitor -b",
+                    "Check: journalctl -u health_monitor -b",
                     self.starts_this_boot)
 
         self._write(clean=False)
@@ -479,7 +479,7 @@ class NTPublisher:
         self.inst = ntcore.NetworkTableInstance.getDefault()
         mode = str(cfg.get("nt_mode", "server")).lower()
         if mode == "client":
-            self.inst.startClient4("health-monitor")
+            self.inst.startClient4("health_monitor")
             if cfg.get("nt_server"):
                 self.inst.setServer(str(cfg["nt_server"]))
                 LOG.info("NT client → %s", cfg["nt_server"])
@@ -624,18 +624,18 @@ class HealthMonitor:
         # Sorting by the date would trust the clock, and the clock is the thing
         # we cannot trust - one boot with a wrong year would sort to the end and
         # be mistaken for the most recent.
-        prefix = f"health-b{self.state.boot_count:05d}"
+        prefix = f"health_b{self.state.boot_count:05d}"
         if self.state.boot_id is not None:
             try:
-                existing = sorted(self.log_dir.glob(f"{prefix}-*.jsonl"))
+                existing = sorted(self.log_dir.glob(f"{prefix}_*.jsonl"))
             except OSError:
                 existing = []
             if existing:
                 return existing[-1]
         # The date is only here so a human can see roughly when a boot was.
         # Nothing depends on it being right.
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        return self.log_dir / f"{prefix}-{stamp}.jsonl"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return self.log_dir / f"{prefix}_{stamp}.jsonl"
 
     # -- sampling ---------------------------------------------------------
 
@@ -907,7 +907,7 @@ class HealthMonitor:
 
         interval = float(self.h["interval_s"])
         heartbeat_log_s = float(self.h["heartbeat_log_s"])
-        LOG.info("health-monitor starting: interval=%.2fs table=%s state=%s",
+        LOG.info("health_monitor starting: interval=%.2fs table=%s state=%s",
                  interval, self.h["nt_table"], self.h["state_dir"])
         LOG.info("writing records to %s", self.log_path or "(disk logging disabled)")
         self.report_previous_boot()
@@ -960,7 +960,7 @@ class HealthMonitor:
         self.flush(force=True)
         self.state.mark_clean()
         self.nt.close()
-        LOG.info("health-monitor stopped cleanly")
+        LOG.info("health_monitor stopped cleanly")
         return 0
 
 

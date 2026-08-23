@@ -39,7 +39,7 @@ def monitor_with_log(tmp, volts):
     logs = Path(tmp) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     now = time.time()
-    with (logs / "health-b00001-20260822-101500.jsonl").open("w") as f:
+    with (logs / "health_b00001_20260822_101500.jsonl").open("w") as f:
         for i, v in enumerate(volts):
             f.write(json.dumps({
                 "ts": now - (len(volts) - i), "volts_in": v,
@@ -55,7 +55,7 @@ def monitor_with_log(tmp, volts):
 
 def report(mon, unclean=True):
     cap = Captured()
-    log = logging.getLogger("health-monitor")
+    log = logging.getLogger("health_monitor")
     previous = log.level
     log.addHandler(cap)
     log.setLevel(logging.DEBUG)   # the "normal power-off" verdict logs at INFO

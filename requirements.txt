@@ -25,7 +25,7 @@
 
 # NetworkTables client, for publishing health data to /Vision/health.
 # pip-only — robotpy is not packaged in Debian. This is the single reason
-# this project needs a venv; see scripts/install-service.sh.
+# this project needs a venv; see scripts/install_service.sh.
 #
 # Pin this to the robotpy release matching your competition season once you
 # know it (e.g. pyntcore==2026.3.2). An unpinned install the night before an

@@ -6,12 +6,12 @@
 # Run as pi, NOT with sudo: it sudos only the steps that need it, so the venv
 # ends up owned by you instead of root.
 #
-# Usage:  ./scripts/install-service.sh
+# Usage:  ./scripts/install_service.sh
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UNIT_NAME="health-monitor.service"
+UNIT_NAME="health_monitor.service"
 UNIT_SRC="${REPO_DIR}/services/${UNIT_NAME}"
 UNIT_DEST="/etc/systemd/system/${UNIT_NAME}"
 VENV_DIR="${REPO_DIR}/.venv"
@@ -129,9 +129,9 @@ cat <<'DONE'
 
 Installed.
 
-  Live logs:      journalctl -u health-monitor -f
-  Since boot:     journalctl -u health-monitor -b
-  Is it running:  systemctl status health-monitor
+  Live logs:      journalctl -u health_monitor -f
+  Since boot:     journalctl -u health_monitor -b
+  Is it running:  systemctl status health_monitor
   One-off check:  python3 src/health_monitor.py --once
 
 If it isn't running, read the status output above. Usually a wrong path in the

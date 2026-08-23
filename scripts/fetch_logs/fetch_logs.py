@@ -36,7 +36,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_CONFIG = HERE / "targets.conf"
-DEFAULT_DEST = Path("fetched-logs")
+DEFAULT_DEST = Path("fetched_logs")
 
 SSH_BASE = ["ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new"]
 
@@ -96,8 +96,8 @@ def pull_journal(host: str, unit: str, dest_dir: Path) -> None:
     """This boot and the previous one. After a power cut the previous boot is
     the interesting one, because that is the boot that died."""
     dest_dir.mkdir(parents=True, exist_ok=True)
-    for label, flag in (("this-boot", "-b"), ("previous-boot", "-b -1")):
-        out = dest_dir / f"journal-{unit}-{label}.txt"
+    for label, flag in (("this_boot", "-b"), ("previous_boot", "-b -1")):
+        out = dest_dir / f"journal_{unit}_{label}.txt"
         with out.open("w", encoding="utf-8") as f:
             ssh(host, f"journalctl -u {unit} {flag} --no-pager 2>/dev/null || true",
                 stdout=f, text=True)
@@ -179,7 +179,7 @@ def summarise(results: list[dict], dest_root: Path) -> None:
     if faults:
         print(f"\n  {faults} sample(s) with ok=false")
 
-    brownouts = [p.name for p in dest_root.rglob("journal-*.txt")
+    brownouts = [p.name for p in dest_root.rglob("journal_*.txt")
                  if "BROWNOUT" in p.read_text(encoding="utf-8", errors="replace")]
     for b in brownouts:
         print(f"  BROWNOUT reported in {b}")

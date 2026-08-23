@@ -46,9 +46,9 @@ RestartSec=2
 
 # systemd creates and chowns these, so the monitor never needs root.
 # Must match state_dir and log_dir in config/config.yaml.
-StateDirectory=health-monitor
+StateDirectory=health_monitor
 StateDirectoryMode=0755
-LogsDirectory=health-monitor
+LogsDirectory=health_monitor
 LogsDirectoryMode=0755
 
 # Under load this is the process least worth killing - it's the one recording
@@ -64,7 +64,7 @@ TimeoutStopSec=15
 NoNewPrivileges=yes
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=health-monitor
+SyslogIdentifier=health_monitor
 
 [Install]
 WantedBy=multi-user.target

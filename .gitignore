@@ -5,7 +5,7 @@ __pycache__/
 .pytest_cache/
 
 # Virtual environments.
-# Created by scripts/install-service.sh with --system-site-packages so the
+# Created by scripts/install_service.sh with --system-site-packages so the
 # apt-installed packages stay visible. Never commit one — it contains
 # absolute paths and architecture-specific binaries.
 venv/
@@ -14,7 +14,7 @@ vision-env/
 
 # Logs and local scratch
 *.log
-fetched-logs/          # pulled off the Pi by scripts/fetch-logs.sh
+fetched_logs/          # pulled off the Pi by scripts/fetch_logs.sh
 captures/
 scratch/
 

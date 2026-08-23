@@ -22,8 +22,8 @@ health:
   nt_table: Vision/health
 
   # systemd creates these. If you change them, change the unit file to match.
-  state_dir: /var/lib/health-monitor
-  log_dir: /var/log/health-monitor     # null = journal only, no file on disk
+  state_dir: /var/lib/health_monitor
+  log_dir: /var/log/health_monitor     # null = journal only, no file on disk
 
   # A match is under 3 minutes, and whatever is still in RAM when the power
   # cuts is lost. Anything failing the health check flushes immediately.
