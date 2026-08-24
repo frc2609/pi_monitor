@@ -14,7 +14,10 @@ vision-env/
 
 # Logs and local scratch
 *.log
-fetched_logs/          # pulled off the Pi by scripts/fetch_logs.sh
+# Pulled off the Pi by scripts/fetch_logs/fetch_logs.py.
+# NOTE: .gitignore has no inline comments - a trailing '# ...' becomes part
+# of the pattern, which is how ~800KB of bench logs got committed once.
+fetched_logs/
 captures/
 scratch/
 
