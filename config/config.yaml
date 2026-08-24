@@ -44,6 +44,17 @@ storage:
   # Safety cap on the RAM buffer. Only fills if the disk stops accepting writes.
   buffer_max_records: 2000
 
+  # Delete the oldest records once the log directory passes this. 0 disables.
+  #
+  # By size rather than a file count, because a boot that browns out after
+  # twenty seconds writes almost nothing. A brownout storm makes many tiny
+  # files, and keeping "the last 30 files" would throw away every real boot
+  # to hold onto fragments - exactly when you need the history. 50MB is
+  # hundreds of normal boots.
+  #
+  # The current boot's file and the previous boot's are never deleted.
+  max_log_mb: 50
+
 
 # --- Other services to keep an eye on ------------------------------------
 services:

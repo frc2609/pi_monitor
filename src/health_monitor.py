@@ -61,6 +61,7 @@ DEFAULTS: dict[str, Any] = {
         "flush_interval_s": 10.0,
         "heartbeat_log_s": 10.0,
         "buffer_max_records": 2000,
+        "max_log_mb": 50,             # 0 disables pruning
     },
     "services": {
         "watch": ["photonvision"],
@@ -812,6 +813,52 @@ class HealthMonitor:
         self.state.set_log_file(path)
         return path
 
+    def prune_logs(self) -> None:
+        """
+        Delete the oldest records once the directory passes max_log_mb.
+
+        By size, not by count. A boot that browns out after twenty seconds
+        writes a couple of KB, so a brownout storm makes many tiny files -
+        and a count-based rule would throw away every real boot to keep thirty
+        near-empty fragments, exactly when the context matters most. By size
+        those fragments barely displace anything.
+
+        Oldest by mtime rather than by name: filenames carry a boot number,
+        and boot numbers repeat if the state is ever reset.
+
+        Never deletes the file this boot is writing, or the previous boot's -
+        that is the one report_previous_boot reads.
+        """
+        cap_mb = float(self.storage.get("max_log_mb") or 0)
+        if self.log_dir is None or cap_mb <= 0:
+            return
+        keep = {self.log_path}
+        if self.state.previous_log_file:
+            keep.add(Path(self.state.previous_log_file))
+        try:
+            files = [p for p in self.log_dir.glob("health_*.jsonl") if p not in keep]
+            files.sort(key=lambda p: p.stat().st_mtime)          # oldest first
+            total = sum(p.stat().st_size for p in self.log_dir.glob("health_*.jsonl"))
+        except OSError as e:
+            LOG.error("could not read %s to prune: %s", self.log_dir, e)
+            return
+
+        cap = cap_mb * 1024 * 1024
+        removed = 0
+        while total > cap and files:
+            victim = files.pop(0)
+            try:
+                size = victim.stat().st_size
+                victim.unlink()
+                total -= size
+                removed += 1
+            except OSError as e:
+                LOG.error("could not delete %s: %s", victim, e)
+                break
+        if removed:
+            LOG.info("pruned %d old record file(s); %s now holds %.1fMB of a "
+                     "%.0fMB cap", removed, self.log_dir, total / 1024 / 1024, cap_mb)
+
     # -- sampling ---------------------------------------------------------
 
     def sample(self) -> dict[str, Any]:
@@ -1163,6 +1210,7 @@ class HealthMonitor:
                         "A 27W charger is usually 27W at 9V or 12V; the Pi needs "
                         "5V at 5A specifically.", ma)
 
+        self.prune_logs()
         self.report_previous_boot()
 
         # systemd holds the service in "activating" until this arrives, then

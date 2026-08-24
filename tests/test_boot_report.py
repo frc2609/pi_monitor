@@ -175,4 +175,47 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         hm.read_boot_id = real_boot_id
 
+
+# Pruning is by size, not by file count, and that matters most in the failure
+# case: a boot that browns out after twenty seconds writes almost nothing, so a
+# storm makes many tiny files. A count rule would bin every real boot to keep
+# the fragments.
+import os   # noqa: E402
+
+with tempfile.TemporaryDirectory() as tmp:
+    logs = Path(tmp) / "logs"
+    logs.mkdir(parents=True)
+    now = time.time()
+
+    def make(name, size, age):
+        f = logs / name
+        f.write_text("x" * size)
+        os.utime(f, (now - age, now - age))
+        return f
+
+    for i in range(1, 21):                       # 20 real boots, 100KB each
+        make("health_b%05d_20260823_1000%02d.jsonl" % (i, i), 100_000, 10_000 - i)
+    for i in range(21, 51):                      # a storm: 30 fragments, 2KB each
+        make("health_b%05d_20260823_2000%02d.jsonl" % (i, i), 2_000, 100 - i)
+
+    cfg2 = deep_merge(DEFAULTS, {"nt": {"enabled": False}, "storage": {
+        "log_dir": str(logs), "state_dir": str(Path(tmp) / "state"),
+        "max_log_mb": 1}})
+    mon = HealthMonitor(cfg2, nt_enabled=False)
+    mon.log_path.write_text("current boot")   # exists once something flushes
+    previous = make("health_b00099_20260823_235959.jsonl", 400_000, 20_000)
+    mon.state.previous_log_file = str(previous)
+
+    mon.prune_logs()
+
+    left = list(logs.glob("*.jsonl"))
+    total = sum(p.stat().st_size for p in left)
+    assert total <= 1024 * 1024, total
+    assert mon.log_path.exists(), "must never delete the current boot's file"
+    assert previous.exists(), "must never delete the previous boot's file"
+    fragments = [p for p in left
+                 if p.stat().st_size < 5_000 and p != mon.log_path]
+    assert len(fragments) == 30, len(fragments)
+    print("PASS  pruning by size keeps all 30 storm fragments, drops old bulk")
+    print("PASS  current and previous boot files are never pruned")
 print("\nALL PASS")
