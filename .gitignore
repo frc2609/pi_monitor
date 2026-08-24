@@ -35,3 +35,7 @@ Thumbs.db
 # been walked through on a real Pi yet, so they are kept local until the steps
 # are confirmed. Remove this and `git add docs/` once they are.
 docs/
+
+# ntcore writes this into the working directory when NT starts. Harmless, but it
+# is runtime state rather than source, and it shows in git status forever.
+networktables.json
