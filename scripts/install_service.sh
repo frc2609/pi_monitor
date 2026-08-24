@@ -136,7 +136,7 @@ Installed.
 
   Live logs:      journalctl -u health_monitor -f
   Since boot:     journalctl -u health_monitor -b
-  Is it running:  systemctl status health_monitor
+  Is it running:  systemctl status health_monitor --no-pager
   One-off check:  python3 src/health_monitor.py --once
 
 If it isn't running, read the status output above. Usually a wrong path in the
